@@ -48,9 +48,110 @@ static void stop_steering(void)
 
 static const char *TAG = "esp_zboss";
 
+static uint16_t pending_annce_short_addr = 0xFFFF;
+static esp_zb_ieee_addr_t pending_annce_ieee = {0};
+
+#define MAX_KNOWN_DEVICES 16
+typedef struct {
+    bool in_use;
+    esp_zb_ieee_addr_t ieee_addr;
+    uint16_t short_addr;
+} known_device_t;
+static known_device_t s_known_devices[MAX_KNOWN_DEVICES] = {0};
+
+static known_device_t *find_known_device_by_ieee(const esp_zb_ieee_addr_t ieee)
+{
+    for (int i = 0; i < MAX_KNOWN_DEVICES; i++) {
+        if (s_known_devices[i].in_use && memcmp(s_known_devices[i].ieee_addr, ieee, sizeof(esp_zb_ieee_addr_t)) == 0) {
+            return &s_known_devices[i];
+        }
+    }
+    return NULL;
+}
+
+static known_device_t *find_known_device_by_short(uint16_t short_addr)
+{
+    for (int i = 0; i < MAX_KNOWN_DEVICES; i++) {
+        if (s_known_devices[i].in_use && s_known_devices[i].short_addr == short_addr) {
+            return &s_known_devices[i];
+        }
+    }
+    return NULL;
+}
+
+static void add_or_update_known_device(const esp_zb_ieee_addr_t ieee, uint16_t short_addr)
+{
+    known_device_t *dev = find_known_device_by_ieee(ieee);
+    if (dev) {
+        if (dev->short_addr != short_addr) {
+            ESP_LOGI(TAG, "Known device IEEE updated short addr 0x%04hx -> 0x%04hx", dev->short_addr, short_addr);
+            app_bridged_device_t *old_dev = app_bridge_get_device_by_zigbee_shortaddr(dev->short_addr);
+            if (old_dev) {
+                ESP_LOGI(TAG, "Remove old bridged endpoint for short addr 0x%04hx", dev->short_addr);
+                app_bridge_remove_device(old_dev);
+            }
+            dev->short_addr = short_addr;
+        }
+        return;
+    }
+    dev = find_known_device_by_short(short_addr);
+    if (dev) {
+        memcpy(dev->ieee_addr, ieee, sizeof(esp_zb_ieee_addr_t));
+        return;
+    }
+    for (int i = 0; i < MAX_KNOWN_DEVICES; i++) {
+        if (!s_known_devices[i].in_use) {
+            s_known_devices[i].in_use = true;
+            memcpy(s_known_devices[i].ieee_addr, ieee, sizeof(esp_zb_ieee_addr_t));
+            s_known_devices[i].short_addr = short_addr;
+            ESP_LOGI(TAG, "Added known device 0x%04hx to list", short_addr);
+            return;
+        }
+    }
+    ESP_LOGW(TAG, "Known device list full");
+}
+
+extern "C" void app_zboss_register_bridged_device(uint16_t short_addr)
+{
+    known_device_t *dev = find_known_device_by_short(short_addr);
+    if (!dev) {
+        for (int i = 0; i < MAX_KNOWN_DEVICES; i++) {
+            if (!s_known_devices[i].in_use) {
+                s_known_devices[i].in_use = true;
+                memcpy(s_known_devices[i].ieee_addr, pending_annce_ieee, sizeof(esp_zb_ieee_addr_t));
+                s_known_devices[i].short_addr = short_addr;
+                ESP_LOGI(TAG, "Registered bridged device 0x%04hx", short_addr);
+                return;
+            }
+        }
+        ESP_LOGW(TAG, "Cannot register bridged device 0x%04hx, list full", short_addr);
+    }
+}
+
 static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
 {
     ESP_ERROR_CHECK(esp_zb_bdb_start_top_level_commissioning(mode_mask));
+}
+
+static void find_on_off_light_cb(uint8_t param)
+{
+    (void)param;
+    if (pending_annce_short_addr == 0xFFFF) {
+        return;
+    }
+    uint16_t short_addr = pending_annce_short_addr;
+    pending_annce_short_addr = 0xFFFF;
+
+    if (app_bridge_get_device_by_zigbee_shortaddr(short_addr)) {
+        ESP_LOGI(TAG, "Device 0x%04hx already has a bridged endpoint, skip discovery", short_addr);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Discovering on/off light on 0x%04hx", short_addr);
+    esp_zb_zdo_match_desc_req_param_t cmd_req;
+    cmd_req.dst_nwk_addr = short_addr;
+    cmd_req.addr_of_interest = short_addr;
+    esp_zb_zdo_find_on_off_light(&cmd_req, zigbee_bridge_find_bridged_on_off_light_cb, NULL);
 }
 
 
@@ -123,10 +224,19 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     case ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE:
         dev_annce_params = (esp_zb_zdo_signal_device_annce_params_t *)esp_zb_app_signal_get_params(p_sg_p);
         ESP_LOGI(TAG, "New device commissioned or rejoined (short: 0x%04hx)", dev_annce_params->device_short_addr);
-        esp_zb_zdo_match_desc_req_param_t cmd_req;
-        cmd_req.dst_nwk_addr = dev_annce_params->device_short_addr;
-        cmd_req.addr_of_interest = dev_annce_params->device_short_addr;
-        esp_zb_zdo_find_on_off_light(&cmd_req, zigbee_bridge_find_bridged_on_off_light_cb, NULL);
+        add_or_update_known_device(dev_annce_params->ieee_addr, dev_annce_params->device_short_addr);
+        if (app_bridge_get_device_by_zigbee_shortaddr(dev_annce_params->device_short_addr)) {
+            ESP_LOGI(TAG, "Device 0x%04hx already has a bridged endpoint, skip discovery", dev_annce_params->device_short_addr);
+            break;
+        }
+        if (!steering_active && !find_known_device_by_ieee(dev_annce_params->ieee_addr)) {
+            ESP_LOGI(TAG, "Steering inactive, ignore new device 0x%04hx", dev_annce_params->device_short_addr);
+            break;
+        }
+        /* 延迟 500ms 再发现，给 end device 留出 rejoin 后的初始化/poll 时间 */
+        pending_annce_short_addr = dev_annce_params->device_short_addr;
+        memcpy(pending_annce_ieee, dev_annce_params->ieee_addr, sizeof(esp_zb_ieee_addr_t));
+        esp_zb_scheduler_alarm((esp_zb_callback_t)find_on_off_light_cb, 0, 500);
         break;
 
     case ESP_ZB_ZDO_SIGNAL_LEAVE_INDICATION: {
@@ -182,6 +292,7 @@ static void zboss_task(void *pvParameters)
     esp_zb_cfg_t zb_nwk_cfg = ESP_ZB_ZC_CONFIG();
     zb_nwk_cfg.nwk_cfg.zczr_cfg.max_children = 16;
     esp_zb_secur_set_unsecure_tc_rejoin_enabled(true);
+    esp_zb_secur_tcpol_set_allow_tc_rejoins(1);
     esp_zb_init(&zb_nwk_cfg);
 
     /* 注册一个 on/off switch 端点（含 on/off client），并附加 temperature/humidity client cluster，用于接收子设备报告 */
@@ -259,16 +370,17 @@ static void button_timer_cb(void *arg)
                 int held_ms = now - press_start;
                 was_pressed = false;
                 if (held_ms >= DEBOUNCE_MS) {
-                    if (network_formed && !steering_active) {
+                    if (!network_formed) {
+                        ESP_LOGI(TAG, "按键释放 (%dms)，但网络尚未组建", held_ms);
+                    } else if (steering_active) {
+                        ESP_LOGI(TAG, "短按触发 (%dms)！正在关闭入网...", held_ms);
+                        stop_steering();
+                    } else {
                         ESP_LOGI(TAG, "短按触发 (%dms)！正在开放入网 %d 秒...", held_ms, STEERING_DURATION_SEC);
                         /* 通过 ZBOSS scheduler 在 ZBOSS 任务上下文中执行 BDB steering */
                         esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb, ESP_ZB_BDB_MODE_NETWORK_STEERING, 0);
                         steering_active = true;
                         steering_start_time = now;
-                    } else if (!network_formed) {
-                        ESP_LOGI(TAG, "按键释放 (%dms)，但网络尚未组建", held_ms);
-                    } else if (steering_active) {
-                        ESP_LOGI(TAG, "按键释放 (%dms)，入网窗口已开放", held_ms);
                     }
                 } else {
                     ESP_LOGI(TAG, "按键释放，按压太短 (%dms)，忽略", held_ms);

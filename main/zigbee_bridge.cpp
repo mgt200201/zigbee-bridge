@@ -15,6 +15,8 @@
 
 #include <zigbee_bridge.h>
 
+extern "C" void app_zboss_register_bridged_device(uint16_t short_addr);
+
 static const char *TAG = "zigbee_bridge";
 
 using namespace chip::app::Clusters;
@@ -46,6 +48,7 @@ void zigbee_bridge_find_bridged_on_off_light_cb(esp_zb_zdp_status_t zdo_status, 
             }
             ESP_LOGI(TAG, "Create/Update bridged node for 0x%04" PRIx16 " zigbee device on endpoint %" PRId16 "", addr,
                      app_bridge_get_matter_endpointid_by_zigbee_shortaddr(addr));
+            app_zboss_register_bridged_device(addr);
         }
     }
 }

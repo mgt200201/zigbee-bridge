@@ -222,31 +222,434 @@ once commissioning is complete in the test.
 
 
 
+load:0x403c8704,len:0xd20
+load:0x403cb700,len:0x2f00
+entry 0x403c8928
+I (31) boot: ESP-IDF v5.4.1 2nd stage bootloader
+I (31) boot: compile time Aug 15 2026 13:45:20
+I (31) boot: Multicore bootloader
+I (32) boot: chip revision: v0.2
+I (34) boot: efuse block revision: v1.4
+I (38) boot.esp32s3: Boot SPI Speed : 80MHz
+I (42) boot.esp32s3: SPI Mode       : DIO
+I (46) boot.esp32s3: SPI Flash Size : 4MB
+I (49) boot: Enabling RNG early entropy source...
+I (54) boot: Partition Table:
+I (56) boot: ## Label            Usage          Type ST Offset   Length
+I (63) boot:  0 esp_secure_cert  unknown          3f 06 0000d000 00002000
+I (69) boot:  1 nvs              WiFi data        01 02 00010000 0000e000
+I (76) boot:  2 nvs_keys         NVS keys         01 04 0001e000 00001000
+I (82) boot:  3 otadata          OTA data         01 00 0001f000 00002000
+I (89) boot:  4 phy_init         RF data          01 01 00021000 00001000
+I (95) boot:  5 ota_0            OTA app          00 10 00030000 001d0000
+I (102) boot:  6 ota_1            OTA app          00 11 00200000 001d0000
+I (108) boot:  7 fctry            WiFi data        01 02 003d0000 00006000
+I (115) boot:  8 zb_storage       Unknown data     01 81 003d6000 00020000
+I (122) boot:  9 zb_fct           Unknown data     01 81 003f6000 00000400
+I (128) boot: End of partition table
+I (132) esp_image: segment 0: paddr=00030020 vaddr=3c160020 size=41284h (266884) map
+I (186) esp_image: segment 1: paddr=000712ac vaddr=3fc9db00 size=05654h ( 22100) load
+I (191) esp_image: segment 2: paddr=00076908 vaddr=40374000 size=09710h ( 38672) load
+I (200) esp_image: segment 3: paddr=00080020 vaddr=42000020 size=15b680h (1422976) map
+I (452) esp_image: segment 4: paddr=001db6a8 vaddr=4037d710 size=102e8h ( 66280) load
+I (467) esp_image: segment 5: paddr=001eb998 vaddr=600fe100 size=0001ch (    28) load
+I (477) boot: Loaded app from partition at offset 0x30000
+I (477) boot: Disabling RNG early entropy source...
+I (488) cpu_start: Multicore app
+I (497) cpu_start: Pro cpu start user code
+I (497) cpu_start: cpu freq: 160000000 Hz
+I (497) app_init: Application information:
+I (497) app_init: Project name:     zigbee_bridge
+I (501) app_init: App version:      1.0
+I (505) app_init: Compile time:     Aug 15 2026 13:45:16
+I (510) app_init: ELF file SHA256:  5d244280b...
+I (514) app_init: ESP-IDF:          v5.4.1
+I (518) efuse_init: Min chip rev:     v0.0
+I (522) efuse_init: Max chip rev:     v0.99 
+I (526) efuse_init: Chip rev:         v0.2
+I (530) heap_init: Initializing. RAM available for dynamic allocation:
+I (536) heap_init: At 3FCC0EE8 len 00028828 (162 KiB): RAM
+I (541) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+I (546) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+I (551) heap_init: At 600FE11C len 00001ECC (7 KiB): RTCRAM
+I (558) spi_flash: detected chip: boya
+I (560) spi_flash: flash io: dio
+W (563) spi_flash: Detected size(16384k) larger than the size in the binary image header(4096k). Using the size in the binary image header.
+I (577) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+I (582) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+I (588) coexist: coex firmware version: e727207
+I (607) coexist: coexist rom version e7ae62f
+I (607) main_task: Started on CPU0
+I (617) main_task: Calling app_main()
+I (657) pp: pp rom version: e7ae62f
+I (657) net80211: net80211 rom version: e7ae62f
+I (667) wifi:wifi driver task: 3fcce4ec, prio:23, stack:6656, core=0
+I (667) wifi:wifi firmware version: 79fa3f41ba
+I (667) wifi:wifi certification version: v7.0
+I (667) wifi:config NVS flash: enabled
+I (667) wifi:config nano formatting: disabled
+I (677) wifi:Init data frame dynamic rx buffer num: 32
+I (677) wifi:Init static rx mgmt buffer num: 5
+I (687) wifi:Init management short buffer num: 32
+I (687) wifi:Init dynamic tx buffer num: 32
+I (697) wifi:Init static tx FG buffer num: 2
+I (697) wifi:Init static rx buffer size: 1600
+I (697) wifi:Init static rx buffer num: 10
+I (707) wifi:Init dynamic rx buffer num: 32
+I (707) wifi_init: rx ba win: 6
+I (707) wifi_init: accept mbox: 6
+I (717) wifi_init: tcpip mbox: 32
+I (717) wifi_init: udp mbox: 6
+I (717) wifi_init: tcp mbox: 6
+I (727) wifi_init: tcp tx win: 5760
+I (727) wifi_init: tcp rx win: 5760
+I (727) wifi_init: tcp mss: 1440
+I (737) wifi_init: WiFi IRAM OP enabled
+I (737) wifi_init: WiFi RX IRAM OP enabled
+I (757) chip[DL]: NVS set: chip-counters/reboot-count = 559 (0x22F)
+I (757) chip[DL]: Starting ESP WiFi layer
+I (757) phy_init: phy_version 700,8582a7fd,Feb 10 2025,20:13:11
+I (797) wifi:mode : sta (28:84:85:48:27:70) + softAP (28:84:85:48:27:71)
+I (797) wifi:enable tsf
+I (797) wifi:Total power save buffer number: 16
+I (797) wifi:Init max length of beacon: 752/752
+I (807) wifi:Init max length of beacon: 752/752
+W (807) wifi:Haven't to connect to a suitable AP now!
+I (817) chip[DL]: I (817) chip[DL]: Posting ESPSystemEvent: Wifi Event with eventId : 43Done driving station state, nothing else to do...
 
-mgt@mgt-virtual-machine:~/pro_esp/zigbee_matter_bridge$ idf.py build
-Executing action: all (aliases: build)
-Running ninja in directory /home/mgt/pro_esp/zigbee_matter_bridge/build
-Executing "ninja all"...
-[1/1] cd /home/mgt/pro_esp/zigbee_matter_bridge/bui...igbee_matter_bridge/build/bootloader/bootloader.bin
-Bootloader binary size 0x5220 bytes. 0x2de0 bytes (36%) free.
-[2/10] Performing build step for 'chip_gn'
-ninja: no work to do.
-[3/8] Building CXX object esp-idf/main/CMakeFiles/__idf_main.dir/app_zboss.cpp.obj
-FAILED: esp-idf/main/CMakeFiles/__idf_main.dir/app_zboss.cpp.obj 
-/home/mgt/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++ -DCJSON_CIRCULAR_LIMIT=10000 -DCJSON_NESTING_LIMIT=1000 -DESP_MDNS_VERSION_NUMBER=\"1.11.3\" -DESP_PLATFORM -DIDF_VER=\"v5.4.1\" -DMBEDTLS_CONFIG_FILE=\"mbedtls/esp_config.h\" -DOPENTHREAD_CONFIG_FILE=\"openthread-core-esp32x-spinel-config.h\" -DOPENTHREAD_PROJECT_LIB_CONFIG_FILE=\"openthread-core-esp32x-spinel-config.h\" -DSOC_MMU_PAGE_SIZE=CONFIG_MMU_PAGE_SIZE -DSOC_XTAL_FREQ_MHZ=CONFIG_XTAL_FREQ -DUNITY_INCLUDE_CONFIG_H -D_GLIBCXX_HAVE_POSIX_SEMAPHORE -D_GLIBCXX_USE_POSIX_SEMAPHORE -D_GNU_SOURCE -D_POSIX_READER_WRITER_LOCKS -Dhollow -I/home/mgt/pro_esp/zigbee_matter_bridge/build/config -I/home/mgt/pro_esp/zigbee_matter_bridge/main -I/home/mgt/esp/esp-matter/examples/common/utils -I/home/mgt/esp/esp-idf-v5.4.1/components/newlib/platform_include -I/home/mgt/esp/esp-idf-v5.4.1/components/freertos/config/include -I/home/mgt/esp/esp-idf-v5.4.1/components/freertos/config/include/freertos -I/home/mgt/esp/esp-idf-v5.4.1/components/freertos/config/xtensa/include -I/home/mgt/esp/esp-idf-v5.4.1/components/freertos/FreeRTOS-Kernel/include -I/home/mgt/esp/esp-idf-v5.4.1/components/freertos/FreeRTOS-Kernel/portable/xtensa/include -I/home/mgt/esp/esp-idf-v5.4.1/components/freertos/FreeRTOS-Kernel/portable/xtensa/include/freertos -I/home/mgt/esp/esp-idf-v5.4.1/components/freertos/esp_additions/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_hw_support/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_hw_support/include/soc -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_hw_support/include/soc/esp32s3 -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_hw_support/dma/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_hw_support/ldo/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_hw_support/debug_probe/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_hw_support/port/esp32s3/. -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_hw_support/port/esp32s3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/heap/include -I/home/mgt/esp/esp-idf-v5.4.1/components/heap/tlsf -I/home/mgt/esp/esp-idf-v5.4.1/components/log/include -I/home/mgt/esp/esp-idf-v5.4.1/components/soc/include -I/home/mgt/esp/esp-idf-v5.4.1/components/soc/esp32s3 -I/home/mgt/esp/esp-idf-v5.4.1/components/soc/esp32s3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/soc/esp32s3/register -I/home/mgt/esp/esp-idf-v5.4.1/components/hal/platform_port/include -I/home/mgt/esp/esp-idf-v5.4.1/components/hal/esp32s3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/hal/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_rom/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_rom/esp32s3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_rom/esp32s3/include/esp32s3 -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_rom/esp32s3 -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_common/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_system/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_system/port/soc -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_system/port/include/private -I/home/mgt/esp/esp-idf-v5.4.1/components/xtensa/esp32s3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/xtensa/include -I/home/mgt/esp/esp-idf-v5.4.1/components/xtensa/deprecated_include -I/home/mgt/esp/esp-idf-v5.4.1/components/lwip/include -I/home/mgt/esp/esp-idf-v5.4.1/components/lwip/include/apps -I/home/mgt/esp/esp-idf-v5.4.1/components/lwip/include/apps/sntp -I/home/mgt/esp/esp-idf-v5.4.1/components/lwip/lwip/src/include -I/home/mgt/esp/esp-idf-v5.4.1/components/lwip/port/include -I/home/mgt/esp/esp-idf-v5.4.1/components/lwip/port/freertos/include -I/home/mgt/esp/esp-idf-v5.4.1/components/lwip/port/esp32xx/include -I/home/mgt/esp/esp-idf-v5.4.1/components/lwip/port/esp32xx/include/arch -I/home/mgt/esp/esp-idf-v5.4.1/components/lwip/port/esp32xx/include/sys -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__esp-zboss-lib/include -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__esp-zigbee-lib/include -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__esp-zigbee-lib/include/radio_spinel -I/home/mgt/esp/esp-idf-v5.4.1/components/driver/deprecated -I/home/mgt/esp/esp-idf-v5.4.1/components/driver/i2c/include -I/home/mgt/esp/esp-idf-v5.4.1/components/driver/touch_sensor/include -I/home/mgt/esp/esp-idf-v5.4.1/components/driver/twai/include -I/home/mgt/esp/esp-idf-v5.4.1/components/driver/touch_sensor/esp32s3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_pm/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_ringbuf/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_gpio/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_pcnt/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_gptimer/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_spi/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_mcpwm/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_ana_cmpr/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_i2s/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_sdmmc/include -I/home/mgt/esp/esp-idf-v5.4.1/components/sdmmc/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_sdspi/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_sdio/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_dac/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_rmt/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_tsens/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_sdm/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_i2c/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_uart/include -I/home/mgt/esp/esp-idf-v5.4.1/components/vfs/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_ledc/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_parlio/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_usb_serial_jtag/include -I/home/mgt/esp/esp-idf-v5.4.1/components/ieee802154/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_coex/include -I/home/mgt/esp/esp-idf-v5.4.1/components/openthread/include -I/home/mgt/esp/esp-idf-v5.4.1/components/openthread/openthread/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_netif/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_event/include -I/home/mgt/esp/esp-idf-v5.4.1/components/mbedtls/port/include -I/home/mgt/esp/esp-idf-v5.4.1/components/mbedtls/mbedtls/include -I/home/mgt/esp/esp-idf-v5.4.1/components/mbedtls/mbedtls/library -I/home/mgt/esp/esp-idf-v5.4.1/components/mbedtls/esp_crt_bundle/include -I/home/mgt/esp/esp-idf-v5.4.1/components/mbedtls/mbedtls/3rdparty/everest/include -I/home/mgt/esp/esp-idf-v5.4.1/components/mbedtls/mbedtls/3rdparty/p256-m -I/home/mgt/esp/esp-idf-v5.4.1/components/mbedtls/mbedtls/3rdparty/p256-m/p256-m -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_app_format/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_bootloader_format/include -I/home/mgt/esp/esp-idf-v5.4.1/components/app_update/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bootloader_support/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bootloader_support/bootloader_flash/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_partition/include -I/home/mgt/esp/esp-idf-v5.4.1/components/efuse/include -I/home/mgt/esp/esp-idf-v5.4.1/components/efuse/esp32s3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_mm/include -I/home/mgt/esp/esp-idf-v5.4.1/components/spi_flash/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_security/include -I/home/mgt/esp/esp-idf-v5.4.1/components/pthread/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_timer/include -I/home/mgt/esp/esp-idf-v5.4.1/components/app_trace/include -I/home/mgt/esp/esp-idf-v5.4.1/components/nvs_flash/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_phy/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_phy/esp32s3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_vfs_console/include -I/home/mgt/esp/esp-idf-v5.4.1/components/wpa_supplicant/include -I/home/mgt/esp/esp-idf-v5.4.1/components/wpa_supplicant/port/include -I/home/mgt/esp/esp-idf-v5.4.1/components/wpa_supplicant/esp_supplicant/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_wifi/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_wifi/include/local -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_wifi/wifi_apps/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_wifi/wifi_apps/nan_app/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/include/esp32c3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/common/osi/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/common/api/include/api -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/common/btc/profile/esp/blufi/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/common/btc/profile/esp/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/common/hci_log/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/common/ble_log/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/ans/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/bas/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/dis/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/gap/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/gatt/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/hr/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/htp/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/ias/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/ipss/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/lls/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/prox/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/cts/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/tps/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/hid/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/sps/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/services/cte/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/util/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/store/ram/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/host/store/config/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/porting/nimble/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/port/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/nimble/transport/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/porting/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/nimble/porting/npl/freertos/include -I/home/mgt/esp/esp-idf-v5.4.1/components/bt/host/nimble/esp-hci/include -I/home/mgt/esp/esp-idf-v5.4.1/components/unity/include -I/home/mgt/esp/esp-idf-v5.4.1/components/unity/unity/src -I/home/mgt/esp/esp-idf-v5.4.1/components/cmock/CMock/src -I/home/mgt/esp/esp-idf-v5.4.1/components/console -I/home/mgt/esp/esp-idf-v5.4.1/components/http_parser -I/home/mgt/esp/esp-idf-v5.4.1/components/esp-tls -I/home/mgt/esp/esp-idf-v5.4.1/components/esp-tls/esp-tls-crypto -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_adc/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_adc/interface -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_adc/esp32s3/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_adc/deprecated/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_isp/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_cam/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_cam/interface -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_jpeg/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_driver_ppa/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_eth/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_gdbstub/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_hid/include -I/home/mgt/esp/esp-idf-v5.4.1/components/tcp_transport/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_http_client/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_http_server/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_https_ota/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_https_server/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_psram/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_lcd/include -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_lcd/interface -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_lcd/rgb/include -I/home/mgt/esp/esp-idf-v5.4.1/components/protobuf-c/protobuf-c -I/home/mgt/esp/esp-idf-v5.4.1/components/protocomm/include/common -I/home/mgt/esp/esp-idf-v5.4.1/components/protocomm/include/security -I/home/mgt/esp/esp-idf-v5.4.1/components/protocomm/include/transports -I/home/mgt/esp/esp-idf-v5.4.1/components/protocomm/include/crypto/srp6a -I/home/mgt/esp/esp-idf-v5.4.1/components/protocomm/proto-c -I/home/mgt/esp/esp-idf-v5.4.1/components/esp_local_ctrl/include -I/home/mgt/esp/esp-idf-v5.4.1/components/espcoredump/include -I/home/mgt/esp/esp-idf-v5.4.1/components/espcoredump/include/port/xtensa -I/home/mgt/esp/esp-idf-v5.4.1/components/wear_levelling/include -I/home/mgt/esp/esp-idf-v5.4.1/components/fatfs/diskio -I/home/mgt/esp/esp-idf-v5.4.1/components/fatfs/src -I/home/mgt/esp/esp-idf-v5.4.1/components/fatfs/vfs -I/home/mgt/esp/esp-idf-v5.4.1/components/idf_test/include -I/home/mgt/esp/esp-idf-v5.4.1/components/idf_test/include/esp32s3 -I/home/mgt/esp/esp-idf-v5.4.1/components/json/cJSON -I/home/mgt/esp/esp-idf-v5.4.1/components/mqtt/esp-mqtt/include -I/home/mgt/esp/esp-idf-v5.4.1/components/nvs_sec_provider/include -I/home/mgt/esp/esp-idf-v5.4.1/components/perfmon/include -I/home/mgt/esp/esp-idf-v5.4.1/components/rt/include -I/home/mgt/esp/esp-idf-v5.4.1/components/spiffs/include -I/home/mgt/esp/esp-idf-v5.4.1/components/touch_element/include -I/home/mgt/esp/esp-idf-v5.4.1/components/usb/include -I/home/mgt/esp/esp-idf-v5.4.1/components/wifi_provisioning/include -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__esp_delta_ota/include -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__esp_secure_cert_mgr/include -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__esp_encrypted_img/include -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__mdns/include -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/src/platform/ESP32 -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/src/platform/OpenThread -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/src/include -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/src/lib -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/src -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/zzz_generated/app-common -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/examples/platform/esp32 -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/third_party/nlassert/repo/include -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/third_party/nlio/repo/include -I/home/mgt/pro_esp/zigbee_matter_bridge/build/esp-idf/chip/src/include -I/home/mgt/pro_esp/zigbee_matter_bridge/build/esp-idf/chip/include -I/home/mgt/pro_esp/zigbee_matter_bridge/build/esp-idf/chip/gen/include -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/config/esp32 -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/config/esp32/../.. -I/home/mgt/esp/esp-matter/components/esp_matter_console -I/home/mgt/esp/esp-matter/components/esp_matter -I/home/mgt/esp/esp-matter/components/esp_matter/utils -I/home/mgt/esp/esp-matter/components/esp_matter/data_model_provider -I/home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/third_party/nlfaultinjection/include -I/home/mgt/esp/esp-matter/components/esp_matter/zap_common -I/home/mgt/esp/esp-matter/components/esp_matter/data_model -I/home/mgt/esp/esp-matter/components/esp_matter_bridge -I/home/mgt/esp/esp-matter/examples/common/app_bridge -I/home/mgt/esp/esp-matter/device_hal/button_driver/button/include -I/home/mgt/esp/esp-matter/examples/common/app_reset -I/home/mgt/esp/esp-matter/components/esp_matter_rainmaker -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__led_strip/include -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__led_strip/interface -I/home/mgt/esp/esp-matter/device_hal/led_driver/include -I/home/mgt/esp/esp-matter/device_hal/device/include -I/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__cjson/cJSON -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -ffunction-sections -fdata-sections -Wall -Werror=all -Wno-error=unused-function -Wno-error=unused-variable -Wno-error=unused-but-set-variable -Wno-error=deprecated-declarations -Wextra -Wno-error=extra -Wno-unused-parameter -Wno-sign-compare -Wno-enum-conversion -gdwarf-4 -ggdb -Og -fno-shrink-wrap -fmacro-prefix-map=/home/mgt/pro_esp/zigbee_matter_bridge=. -fmacro-prefix-map=/home/mgt/esp/esp-idf-v5.4.1=/IDF -fstrict-volatile-bitfields -fno-jump-tables -fno-tree-switch-conversion -Wno-error=uninitialized -Wno-error=maybe-uninitialized -Wno-missing-field-initializers -Wno-error=array-bounds -Wno-write-strings -Wno-format-nonliteral -Wno-format-security -Wno-error=cpp -std=gnu++2b -fno-exceptions -fno-rtti -fuse-cxa-atexit -std=gnu++17 -Os -DCHIP_HAVE_CONFIG_H "-DCHIP_ADDRESS_RESOLVE_IMPL_INCLUDE_HEADER=<lib/address_resolve/AddressResolve_DefaultImpl.h>" -MD -MT esp-idf/main/CMakeFiles/__idf_main.dir/app_zboss.cpp.obj -MF esp-idf/main/CMakeFiles/__idf_main.dir/app_zboss.cpp.obj.d -o esp-idf/main/CMakeFiles/__idf_main.dir/app_zboss.cpp.obj -c /home/mgt/pro_esp/zigbee_matter_bridge/main/app_zboss.cpp
-/home/mgt/pro_esp/zigbee_matter_bridge/main/app_zboss.cpp: In function 'void zboss_task(void*)':
-/home/mgt/pro_esp/zigbee_matter_bridge/main/app_zboss.cpp:154:31: warning: 'void esp_zb_main_loop_iteration()' is deprecated [-Wdeprecated-declarations]
-  154 |     esp_zb_main_loop_iteration();
-      |     ~~~~~~~~~~~~~~~~~~~~~~~~~~^~
-In file included from /home/mgt/pro_esp/zigbee_matter_bridge/main/app_zboss.h:12,
-                 from /home/mgt/pro_esp/zigbee_matter_bridge/main/app_zboss.cpp:9:
-/home/mgt/pro_esp/zigbee_matter_bridge/managed_components/espressif__esp-zigbee-lib/include/esp_zigbee_core.h:386:6: note: declared here
-  386 | void esp_zb_main_loop_iteration(void);
-      |      ^~~~~~~~~~~~~~~~~~~~~~~~~~
-/home/mgt/pro_esp/zigbee_matter_bridge/main/app_zboss.cpp: In function 'void button_timer_cb(void*)':
-/home/mgt/pro_esp/zigbee_matter_bridge/main/app_zboss.cpp:207:63: error: void value not ignored as it ought to be
-  207 |                         esp_err_t err = esp_zb_scheduler_alarm((esp_zb_callback_t)permit_join_scheduler_cb, 0, STEERING_DURATION_SEC);
-      |                                         ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-ninja: build stopped: subcommand failed.
-ninja failed with exit code 1, output of the command is in the /home/mgt/pro_esp/zigbee_matter_bridge/build/log/idf_py_stderr_output_115947 and /home/mgt/pro_esp/zigbee_matter_bridge/build/log/idf_py_stdout_output_115947
+W (827) wifi:Haven't to connect to a suitable AP now!
+I (827) chip[DL]: Done driving station state, nothing else to do...
+I (827) chip[DL]: Posting ESPSystemEvent: Wifi Event with eventId : 2
+I (837) chip[SVR]: I (847) chip[DL]: Initializing subscription resumption storage...
+Posting ESPSystemEvent: Wifi Event with eventId : 43
+I (847) chip[SVR]: I (857) chip[DL]: Server initializing...Posting ESPSystemEvent: Wifi Event with eventId : 12
 
+I (867) chip[TS]: Last Known Good Time: 2023-10-14T01:16:48
+I (867) chip[DMG]: AccessControl: initializing
+I (877) chip[DMG]: Examples::AccessControlDelegate::Init
+I (877) chip[DMG]: AccessControl: setting
+I (887) chip[DMG]: DefaultAclStorage: initializing
+I (887) chip[DMG]: DefaultAclStorage: 0 entries loaded
+I (897) chip[SVR]: WARNING: mTestEventTriggerDelegate is null
+I (947) chip[DMG]: AccessControlCluster: initializing
+I (947) chip[DIS]: Updating services using commissioning mode 1
+I (947) chip[DIS]: CHIP minimal mDNS started advertising.
+I (947) chip[DIS]: Advertise commission parameter vendorID=65521 productID=32768 discriminator=3840/15 cm=1 cp=0 jf=0
+I (957) chip[DIS]: CHIP minimal mDNS configured as 'Commissionable node device'; instance name: 4E9550A6B1B9FEEE.
+I (967) chip[DIS]: mDNS service published: _matterc._udp
+I (977) chip[IN]: CASE Server enabling CASE session setups
+I (977) chip[SVR]: Joining Multicast groups
+I (987) chip[SVR]: Server Listening...
+I (987) chip[DL]: WIFI_EVENT_STA_START
+E (987) app_bridged_device: Error reading the device type
+W (987) wifi:Haven't to connect to a suitable AP now!
+E (997) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 2
+I (997) chip[DL]: Done driving station state, nothing else to do...
+E (1007) app_bridged_device: Error reading the device type
+I (1017) BLE_INIT: BT controller compile version [d74042a]
+E (1027) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 3
+I (1027) BLE_INIT: Bluetooth MAC: 28:84:85:48:27:72
+E (1047) app_bridged_device: Error reading the device type
+I (1047) NimBLE: GAP procedure initiated: stop advertising.
+
+I (1057) CHIP[DL]: BLE host-controller synced
+E (1057) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 4
+E (1067) app_bridged_device: Error reading the device type
+E (1077) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 5
+E (1087) app_bridged_device: Error reading the device type
+E (1087) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 6
+E (1097) app_bridged_device: Error reading the device type
+E (1107) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 7
+E (1117) app_bridged_device: Error reading the device type
+E (1117) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 8
+E (1127) app_bridged_device: Error reading the device type
+E (1137) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 9
+E (1147) app_bridged_device: Error reading the device type
+E (1147) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 10
+E (1157) app_bridged_device: Error reading the device type
+E (1167) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 11
+I (1177) esp_matter_bridge: Cluster plugin init for the new added endpoint
+I (1557) chip[DL]: Configuring CHIPoBLE advertising (interval 25 ms, connectable)
+I (1557) NimBLE: GAP procedure initiated: advertise; 
+I (1557) NimBLE: disc_mode=2
+I (1557) NimBLE:  adv_channel_map=0 own_addr_type=1 adv_filter_policy=0 adv_itvl_min=40 adv_itvl_max=40
+I (1567) NimBLE: 
+
+I (1567) chip[DL]: CHIPoBLE advertising started
+I (1577) app_main: Commissioning window opened
+I (1577) chip[ZCL]: Boot reason: 0
+I (1577) chip[ZCL]: Endpoint c On/off already set to new value
+I (1587) esp_matter_bridge: Cluster plugin init for the new added endpoint
+I (1597) chip[ZCL]: Boot reason: 0
+I (1597) chip[ZCL]: Endpoint d On/off already set to new value
+I (1607) esp_matter_bridge: Cluster plugin init for the new added endpoint
+I (1607) chip[ZCL]: Boot reason: 0
+I (1607) chip[ZCL]: Endpoint e On/off already set to new value
+I (1617) esp_matter_bridge: Cluster plugin init for the new added endpoint
+I (1627) chip[ZCL]: Boot reason: 0
+I (1627) chip[ZCL]: Endpoint f On/off already set to new value
+I (1697) gpio: GPIO[9]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 
+I (1697) gpio: GPIO[10]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 
+I (1707) esp_zboss: Button/LED init done, GPIO9 initial level: 1
+I (1707) ESP_RADIO_SPINEL: spinel UART interface initialization completed
+I (1707) ESP_RADIO_SPINEL: Spinel UART interface has been successfully enabled
+I (1727) ESP_ZIGBEE_RADIO_SPINEL_UART: Spinel UART interface enable successfully
+                                                                                                                       I(1737) OPENTHREAD:I (1717) main_task: Returned from app_main()
+[I] P-SpinelDrive-: co-processor reset: RESET_POWER_ON
+E(1737) OPENTHREAD:[C] P-SpinelDrive-: Software reset co-processor successfully
+> I (1857) esp_zboss: status: -1
+I (1857) esp_zboss: Zigbee stack initialized
+I (1877) esp_zboss: status: 0
+I (1877) esp_zboss: Start network formation
+I (1887) esp_zboss: Formed network successfully
+I (1887) esp_zboss: ieee extended address: 74:4d:bd:ff:fe:6e:6a:46, PAN ID: 0x5b1a)
+I (1897) esp_zboss: Network Key (for Wireshark decryption):
+I (1897) esp_zboss: 1e 14 e6 3f a2 52 ce 65 f6 29 fe 0a 10 0f 36 1e
+I (1907) esp_zboss: 短按 BOOT 按键可开放入网 180 秒
+I (18927) esp_zboss: Button pressed (GPIO9=0), network_formed=1, steering_active=0
+I (19087) esp_zboss: 短按触发 (160ms)！正在开放入网 180 秒...
+I (19687) esp_zboss: status: 0
+I (19687) esp_zboss: BDB steering 成功，设备已加入或网络已开放
+I (19827) esp_zboss: status: 0
+I (26997) esp_zboss: status: 0
+I (27007) esp_zboss: status: 0
+I (27047) esp_zboss: New device commissioned or rejoined (short: 0x625f)
+I (27087) zigbee_bridge: on_off_light found: address:0x625f, endpoint:10, response_status:0
+I (27097) esp_matter_bridge: Cluster plugin init for the new added endpoint
+E (27097) esp_matter_bridge: Endpoints are used up
+E (27107) chip[SVR]: Failed to unregister UserLabel on endpoint 28 - Error: d8
+
+abort() was called at PC 0x4201cff3 on core 0
+--- 0x4201cff3: chip::app::LazyRegisteredServerCluster<(anonymous namespace)::ESPMatterDescriptorCluster>::Destroy() at /home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/src/app/server-cluster/ServerClusterInterfaceRegistry.h:86
+
+
+Backtrace: 0x40375c05:0x3fcf2640 0x40380f31:0x3fcf2660 0x4038897e:0x3fcf2680 0x4201cff3:0x3fcf26f0 0x4201d35b:0x3fcf2710 0x420125b5:0x3fcf2740 0x42074c7f:0x3fcf2770 0x42074fbd:0x3fcf2790 0x42034ebb:0x3fcf27c0 0x4200d830:0x3fcf2830 0x42035d21:0x3fcf2870 0x420466e0:0x3fcf2890 0x42061e6b:0x3fcf28d0 0x42035848:0x3fcf28f0 0x4200d29f:0x3fcf2910 0x40381991:0x3fcf2960
+--- 0x40375c05: panic_abort at /home/mgt/esp/esp-idf-v5.4.1/components/esp_system/panic.c:454
+--- 0x40380f31: esp_system_abort at /home/mgt/esp/esp-idf-v5.4.1/components/esp_system/port/esp_system_chip.c:87
+--- 0x4038897e: abort at /home/mgt/esp/esp-idf-v5.4.1/components/newlib/abort.c:38
+--- 0x4201cff3: chip::app::LazyRegisteredServerCluster<(anonymous namespace)::ESPMatterDescriptorCluster>::Destroy() at /home/mgt/esp/esp-matter/connectedhomeip/connectedhomeip/src/app/server-cluster/ServerClusterInterfaceRegistry.h:86
+--- 0x4201d35b: ESPMatterDescriptorClusterServerShutdownCallback(unsigned short) at /home/mgt/esp/esp-matter/components/esp_matter/data_model_provider/clusters/descriptor_integration.cpp:122
+--- 0x420125b5: esp_matter::endpoint::destroy(unsigned int*, unsigned int*) at /home/mgt/esp/esp-matter/components/esp_matter/data_model/esp_matter_data_model.cpp:1742
+--- 0x42074c7f: esp_matter_bridge::remove_device(esp_matter_bridge::device*) at /home/mgt/esp/esp-matter/components/esp_matter_bridge/esp_matter_bridge.cpp:401
+--- 0x42074fbd: esp_matter_bridge::create_device(unsigned int*, unsigned short, unsigned long, void*) at /home/mgt/esp/esp-matter/components/esp_matter_bridge/esp_matter_bridge.cpp:344
+--- 0x42034ebb: app_bridge_create_bridged_device(unsigned int*, unsigned short, unsigned long, app_bridged_device_type_t, app_bridged_device_address_t, void*) at /home/mgt/esp/esp-matter/examples/common/app_bridge/app_bridged_device.cpp:181
+--- 0x4200d830: zigbee_bridge_find_bridged_on_off_light_cb(esp_zb_zdp_status_t, unsigned short, unsigned char, void*) at /home/mgt/pro_esp/zigbee_matter_bridge/main/zigbee_bridge.cpp:40
+--- 0x42035d21: find_device_cb at ??:?
+--- 0x420466e0: zb_sched_loop_iteration at ??:?
+--- 0x42061e6b: zboss_main_loop_iteration at ??:?
+--- 0x42035848: esp_zb_main_loop_iteration at ??:?
+--- 0x4200d29f: zboss_task(void*) at /home/mgt/pro_esp/zigbee_matter_bridge/main/app_zboss.cpp:193
+--- 0x40381991: vPortTaskWrapper at /home/mgt/esp/esp-idf-v5.4.1/components/freertos/FreeRTOS-Kernel/portable/xtensa/port.c:139
+
+
+
+
+ELF file SHA256: 5d244280b
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x2b (SPI_FAST_FLASH_BOOT)
+Saved PC:0x40375b68
+--- 0x40375b68: esp_restart_noos at /home/mgt/esp/esp-idf-v5.4.1/components/esp_system/port/soc/esp32s3/system_internal.c:160
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2810,len:0x15a0
+load:0x403c8700,len:0x4
+load:0x403c8704,len:0xd20
+load:0x403cb700,len:0x2f00
+entry 0x403c8928
+I (31) boot: ESP-IDF v5.4.1 2nd stage bootloader
+I (31) boot: compile time Aug 15 2026 13:45:20
+I (31) boot: Multicore bootloader
+I (32) boot: chip revision: v0.2
+I (34) boot: efuse block revision: v1.4
+I (38) boot.esp32s3: Boot SPI Speed : 80MHz
+I (42) boot.esp32s3: SPI Mode       : DIO
+I (46) boot.esp32s3: SPI Flash Size : 4MB
+I (49) boot: Enabling RNG early entropy source...
+I (54) boot: Partition Table:
+I (56) boot: ## Label            Usage          Type ST Offset   Length
+I (63) boot:  0 esp_secure_cert  unknown          3f 06 0000d000 00002000
+I (69) boot:  1 nvs              WiFi data        01 02 00010000 0000e000
+I (76) boot:  2 nvs_keys         NVS keys         01 04 0001e000 00001000
+I (82) boot:  3 otadata          OTA data         01 00 0001f000 00002000
+I (89) boot:  4 phy_init         RF data          01 01 00021000 00001000
+I (95) boot:  5 ota_0            OTA app          00 10 00030000 001d0000
+I (102) boot:  6 ota_1            OTA app          00 11 00200000 001d0000
+I (108) boot:  7 fctry            WiFi data        01 02 003d0000 00006000
+I (115) boot:  8 zb_storage       Unknown data     01 81 003d6000 00020000
+I (122) boot:  9 zb_fct           Unknown data     01 81 003f6000 00000400
+I (128) boot: End of partition table
+I (132) esp_image: segment 0: paddr=00030020 vaddr=3c160020 size=41284h (266884) map
+I (186) esp_image: segment 1: paddr=000712ac vaddr=3fc9db00 size=05654h ( 22100) load
+I (191) esp_image: segment 2: paddr=00076908 vaddr=40374000 size=09710h ( 38672) load
+I (200) esp_image: segment 3: paddr=00080020 vaddr=42000020 size=15b680h (1422976) map
+I (451) esp_image: segment 4: paddr=001db6a8 vaddr=4037d710 size=102e8h ( 66280) load
+I (465) esp_image: segment 5: paddr=001eb998 vaddr=600fe100 size=0001ch (    28) load
+I (476) boot: Loaded app from partition at offset 0x30000
+I (476) boot: Disabling RNG early entropy source...
+I (486) cpu_start: Multicore app
+I (495) cpu_start: Pro cpu start user code
+I (495) cpu_start: cpu freq: 160000000 Hz
+I (495) app_init: Application information:
+I (495) app_init: Project name:     zigbee_bridge
+I (500) app_init: App version:      1.0
+I (503) app_init: Compile time:     Aug 15 2026 13:45:16
+I (508) app_init: ELF file SHA256:  5d244280b...
+I (512) app_init: ESP-IDF:          v5.4.1
+I (516) efuse_init: Min chip rev:     v0.0
+I (520) efuse_init: Max chip rev:     v0.99 
+I (524) efuse_init: Chip rev:         v0.2
+I (528) heap_init: Initializing. RAM available for dynamic allocation:
+I (534) heap_init: At 3FCC0EE8 len 00028828 (162 KiB): RAM
+I (539) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+I (544) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+I (550) heap_init: At 600FE11C len 00001ECC (7 KiB): RTCRAM
+I (556) spi_flash: detected chip: boya
+I (558) spi_flash: flash io: dio
+W (561) spi_flash: Detected size(16384k) larger than the size in the binary image header(4096k). Using the size in the binary image header.
+I (576) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+I (580) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+I (587) coexist: coex firmware version: e727207
+I (605) coexist: coexist rom version e7ae62f
+I (606) main_task: Started on CPU0
+I (616) main_task: Calling app_main()
+I (656) pp: pp rom version: e7ae62f
+I (656) net80211: net80211 rom version: e7ae62f
+I (666) wifi:wifi driver task: 3fcce4ec, prio:23, stack:6656, core=0
+I (666) wifi:wifi firmware version: 79fa3f41ba
+I (666) wifi:wifi certification version: v7.0
+I (666) wifi:config NVS flash: enabled
+I (666) wifi:config nano formatting: disabled
+I (676) wifi:Init data frame dynamic rx buffer num: 32
+I (676) wifi:Init static rx mgmt buffer num: 5
+I (686) wifi:Init management short buffer num: 32
+I (686) wifi:Init dynamic tx buffer num: 32
+I (696) wifi:Init static tx FG buffer num: 2
+I (696) wifi:Init static rx buffer size: 1600
+I (696) wifi:Init static rx buffer num: 10
+I (706) wifi:Init dynamic rx buffer num: 32
+I (706) wifi_init: rx ba win: 6
+I (706) wifi_init: accept mbox: 6
+I (716) wifi_init: tcpip mbox: 32
+I (716) wifi_init: udp mbox: 6
+I (716) wifi_init: tcp mbox: 6
+I (726) wifi_init: tcp tx win: 5760
+I (726) wifi_init: tcp rx win: 5760
+I (726) wifi_init: tcp mss: 1440
+I (736) wifi_init: WiFi IRAM OP enabled
+I (736) wifi_init: WiFi RX IRAM OP enabled
+I (756) chip[DL]: NVS set: chip-counters/reboot-count = 560 (0x230)
+I (756) chip[DL]: Starting ESP WiFi layer
+I (756) phy_init: phy_version 700,8582a7fd,Feb 10 2025,20:13:11
+I (796) wifi:mode : sta (28:84:85:48:27:70) + softAP (28:84:85:48:27:71)
+I (796) wifi:enable tsf
+I (796) wifi:Total power save buffer number: 16
+I (796) wifi:Init max length of beacon: 752/752
+I (806) wifi:Init max length of beacon: 752/752
+W (806) wifi:Haven't to connect to a suitable AP now!
+I (806) chip[DL]: I (806) chip[DL]: Posting ESPSystemEvent: Wifi Event with eventId : 43Done driving station state, nothing else to do...
+
+W (826) wifi:Haven't to connect to a suitable AP now!
+I (826) chip[DL]: Done driving station state, nothing else to do...
+I (826) chip[DL]: Posting ESPSystemEvent: Wifi Event with eventId : 2
+I (836) chip[SVR]: I (836) chip[DL]: Initializing subscription resumption storage...
+Posting ESPSystemEvent: Wifi Event with eventId : 43
+I (846) chip[SVR]: I (856) chip[DL]: Server initializing...Posting ESPSystemEvent: Wifi Event with eventId : 12
+
+I (866) chip[TS]: Last Known Good Time: 2023-10-14T01:16:48
+I (866) chip[DMG]: AccessControl: initializing
+I (876) chip[DMG]: Examples::AccessControlDelegate::Init
+I (876) chip[DMG]: AccessControl: setting
+I (876) chip[DMG]: DefaultAclStorage: initializing
+I (886) chip[DMG]: DefaultAclStorage: 0 entries loaded
+I (886) chip[SVR]: WARNING: mTestEventTriggerDelegate is null
+I (946) chip[DMG]: AccessControlCluster: initializing
+I (946) chip[DIS]: Updating services using commissioning mode 1
+I (946) chip[DIS]: CHIP minimal mDNS started advertising.
+I (946) chip[DIS]: Advertise commission parameter vendorID=65521 productID=32768 discriminator=3840/15 cm=1 cp=0 jf=0
+I (956) chip[DIS]: CHIP minimal mDNS configured as 'Commissionable node device'; instance name: FF50C6672BD2EAB6.
+I (966) chip[DIS]: mDNS service published: _matterc._udp
+I (976) chip[IN]: CASE Server enabling CASE session setups
+I (976) chip[SVR]: Joining Multicast groups
+I (986) chip[SVR]: Server Listening...
+I (986) chip[DL]: WIFI_EVENT_STA_START
+E (986) app_bridged_device: Error reading the device type
+W (986) wifi:Haven't to connect to a suitable AP now!
+E (996) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 2
+I (996) chip[DL]: Done driving station state, nothing else to do...
+E (1006) app_bridged_device: Error reading the device type
+I (1016) BLE_INIT: BT controller compile version [d74042a]
+E (1026) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 3
+I (1026) BLE_INIT: Bluetooth MAC: 28:84:85:48:27:72
+E (1046) app_bridged_device: Error reading the device type
+I (1046) NimBLE: GAP procedure initiated: stop advertising.
+
+I (1056) CHIP[DL]: BLE host-controller synced
+E (1056) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 4
+E (1066) app_bridged_device: Error reading the device type
+E (1076) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 5
+E (1086) app_bridged_device: Error reading the device type
+E (1086) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 6
+E (1096) app_bridged_device: Error reading the device type
+E (1106) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 7
+E (1116) app_bridged_device: Error reading the device type
+E (1116) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 8
+E (1126) app_bridged_device: Error reading the device type
+E (1136) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 9
+E (1146) app_bridged_device: Error reading the device type
+E (1146) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 10
+E (1156) app_bridged_device: Error reading the device type
+E (1166) app_bridged_device: Failed to read the app_bridged_device_type and app_bridged_device_address for endpoint 11
+I (1176) esp_matter_bridge: Cluster plugin init for the new added endpoint
+I (1556) chip[DL]: Configuring CHIPoBLE advertising (interval 25 ms, connectable)
+I (1556) NimBLE: GAP procedure initiated: advertise; 
+I (1556) NimBLE: disc_mode=2
+I (1556) NimBLE:  adv_channel_map=0 own_addr_type=1 adv_filter_policy=0 adv_itvl_min=40 adv_itvl_max=40
+I (1566) NimBLE: 
+
+I (1566) chip[DL]: CHIPoBLE advertising started
+I (1576) app_main: Commissioning window opened
+I (1576) chip[ZCL]: Boot reason: 0
+I (1576) chip[ZCL]: Endpoint c On/off already set to new value
+I (1586) esp_matter_bridge: Cluster plugin init for the new added endpoint
+I (1596) chip[ZCL]: Boot reason: 0
+I (1596) chip[ZCL]: Endpoint d On/off already set to new value
+I (1606) esp_matter_bridge: Cluster plugin init for the new added endpoint
+I (1606) chip[ZCL]: Boot reason: 0
+I (1606) chip[ZCL]: Endpoint e On/off already set to new value
+I (1616) esp_matter_bridge: Cluster plugin init for the new added endpoint
+I (1626) chip[ZCL]: Boot reason: 0
+I (1626) chip[ZCL]: Endpoint f On/off already set to new value
+I (1696) gpio: GPIO[9]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0 
+I (1696) gpio: GPIO[10]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 
+I (1706) esp_zboss: Button/LED init done, GPIO9 initial level: 1
+I (1706) ESP_RADIO_SPINEL: spinel UART interface initialization completed
+I (1706) ESP_RADIO_SPINEL: Spinel UART interface has been successfully enabled
+                                                                                                                       I (1726) ESP_ZIGBEE_RADIO_SPINEL_UART: Spinel UART interface enable successfully
+I (1716) main_task: Returned from app_main()
+I(1736) OPENTHREAD:[I] P-SpinelDrive-: co-processor reset: RESET_POWER_ON
+E(1736) OPENTHREAD:[C] P-SpinelDrive-: Software reset co-processor successfully
+> I (1866) esp_zboss: status: -1
+I (1866) esp_zboss: Zigbee stack initialized
+I (1886) esp_zboss: status: 0
+I (1886) esp_zboss: Start network formation
+I (1896) esp_zboss: Formed network successfully
+I (1896) esp_zboss: ieee extended address: 74:4d:bd:ff:fe:6e:6a:46, PAN ID: 0x5b1a)
+I (1906) esp_zboss: Network Key (for Wireshark decryption):
+I (1906) esp_zboss: 1e 14 e6 3f a2 52 ce 65 f6 29 fe 0a 10 0f 36 1e
+I (1916) esp_zboss: 短按 BOOT 按键可开放入网 180 秒
+I (19876) esp_zboss: status: 0
+I (30946) chip[DL]: bleAdv Timeout : Start slow advertisement
+I (30946) chip[DL]: Configuring CHIPoBLE advertising (interval 500 ms, connectable)
+I (30946) chip[DL]: Device already advertising, stop active advertisement and restart
+I (30966) NimBLE: GAP procedure initiated: stop advertising.
+
+I (30966) NimBLE: GAP procedure initiated: advertise; 
+I (30976) NimBLE: disc_mode=2
+I (30976) NimBLE:  adv_channel_map=0 own_addr_type=1 adv_filter_policy=0 adv_itvl_min=800 adv_itvl_max=800
+I (30986) NimBLE: 
+
+
+mgt@mgt-virtual-machine:~/pro_esp/zigbee_matter_bridge$ 
