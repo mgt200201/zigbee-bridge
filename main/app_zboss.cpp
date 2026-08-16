@@ -14,6 +14,7 @@
 #include <esp_zigbee_secur.h>
 #include <zdo/esp_zigbee_zdo_command.h>
 #include <ha/esp_zigbee_ha_standard.h>
+#include <test/esp_zigbee_test_utils.h>
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -133,10 +134,14 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             (esp_zb_zdo_signal_leave_indication_params_t *)esp_zb_app_signal_get_params(p_sg_p);
         ESP_LOGI(TAG, "Device leaving indication (short: 0x%04hx, rejoin: %d)", leave_params->short_addr,
                  leave_params->rejoin);
-        app_bridged_device_t *bridged_device = app_bridge_get_device_by_zigbee_shortaddr(leave_params->short_addr);
-        if (bridged_device) {
-            ESP_LOGI(TAG, "Removing bridged device for short addr 0x%04hx", leave_params->short_addr);
-            app_bridge_remove_device(bridged_device);
+        if (leave_params->rejoin == 0) {
+            app_bridged_device_t *bridged_device = app_bridge_get_device_by_zigbee_shortaddr(leave_params->short_addr);
+            if (bridged_device) {
+                ESP_LOGI(TAG, "Removing bridged device for short addr 0x%04hx", leave_params->short_addr);
+                app_bridge_remove_device(bridged_device);
+            }
+        } else {
+            ESP_LOGI(TAG, "Device 0x%04hx is expected to rejoin, keep bridged endpoint", leave_params->short_addr);
         }
         break;
     }
@@ -175,6 +180,8 @@ static void zboss_task(void *pvParameters)
 {
     /* initialize Zigbee stack with Zigbee coordinator config */
     esp_zb_cfg_t zb_nwk_cfg = ESP_ZB_ZC_CONFIG();
+    zb_nwk_cfg.nwk_cfg.zczr_cfg.max_children = 16;
+    esp_zb_secur_set_unsecure_tc_rejoin_enabled(true);
     esp_zb_init(&zb_nwk_cfg);
 
     /* 注册一个 on/off switch 端点（含 on/off client），并附加 temperature/humidity client cluster，用于接收子设备报告 */
