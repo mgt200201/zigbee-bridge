@@ -262,17 +262,65 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     }
 }
 
-static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t *message)
+static void parse_and_log_attribute(uint8_t src_ep, uint8_t dst_ep, uint16_t cluster, const esp_zb_zcl_attribute_t *attribute)
+{
+    ESP_LOGI(TAG, "ZCL report: src_ep=%d, dst_ep=%d, cluster=0x%04x, attr=0x%04x, size=%d",
+             src_ep, dst_ep, cluster, attribute->id, attribute->data.size);
+
+    switch (cluster) {
+    case ESP_ZB_ZCL_CLUSTER_ID_ON_OFF:
+        if (attribute->id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID && attribute->data.size == 1) {
+            uint8_t on_off = *(uint8_t *)attribute->data.value;
+            ESP_LOGI(TAG, "  -> On/Off state: %s", on_off ? "ON" : "OFF");
+        }
+        break;
+
+    case ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT:
+        if (attribute->id == ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID && attribute->data.size == 2) {
+            int16_t raw = *(int16_t *)attribute->data.value;
+            ESP_LOGI(TAG, "  -> Temperature: %.2f C (raw=%d)", raw / 100.0, raw);
+        }
+        break;
+
+    case ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT:
+        if (attribute->id == ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID &&
+            attribute->data.size == 2) {
+            uint16_t raw = *(uint16_t *)attribute->data.value;
+            ESP_LOGI(TAG, "  -> Humidity: %.2f %% (raw=%u)", raw / 100.0, raw);
+        }
+        break;
+
+    default:
+        ESP_LOGI(TAG, "  -> Unhandled cluster 0x%04x", cluster);
+        break;
+    }
+}
+
+static esp_err_t zb_set_attr_value_handler(const esp_zb_zcl_set_attr_value_message_t *message)
 {
     if (!message) {
         return ESP_FAIL;
     }
     if (message->info.status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-        ESP_LOGW(TAG, "Received ZCL report with error status(%d)", message->info.status);
+        ESP_LOGW(TAG, "Received ZCL set attr with error status(%d)", message->info.status);
         return ESP_ERR_INVALID_ARG;
     }
-    ESP_LOGI(TAG, "Received ZCL report: endpoint(%d), cluster(0x%04x), attribute(0x%04x), data size(%d)",
-             message->info.dst_endpoint, message->info.cluster, message->attribute.id, message->attribute.data.size);
+    parse_and_log_attribute(message->info.dst_endpoint, message->info.dst_endpoint,
+                            message->info.cluster, &message->attribute);
+    return ESP_OK;
+}
+
+static esp_err_t zb_report_attr_handler(const esp_zb_zcl_report_attr_message_t *message)
+{
+    if (!message) {
+        return ESP_FAIL;
+    }
+    if (message->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+        ESP_LOGW(TAG, "Received ZCL report with error status(%d)", message->status);
+        return ESP_ERR_INVALID_ARG;
+    }
+    parse_and_log_attribute(message->src_endpoint, message->dst_endpoint,
+                            message->cluster, &message->attribute);
     return ESP_OK;
 }
 
@@ -280,7 +328,9 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
 {
     switch (callback_id) {
     case ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID:
-        return zb_attribute_handler((esp_zb_zcl_set_attr_value_message_t *)message);
+        return zb_set_attr_value_handler((esp_zb_zcl_set_attr_value_message_t *)message);
+    case ESP_ZB_CORE_REPORT_ATTR_CB_ID:
+        return zb_report_attr_handler((esp_zb_zcl_report_attr_message_t *)message);
     default:
         return ESP_OK;
     }
