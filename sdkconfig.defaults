@@ -47,3 +47,7 @@ CONFIG_SUPPORT_GROUPCAST_CLUSTER=n
 
 # Increase max dynamic endpoints for bridged Zigbee devices
 CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=32
+
+# Default WiFi credentials for Home Assistant network
+CONFIG_DEFAULT_WIFI_SSID="Flymodem2855"
+CONFIG_DEFAULT_WIFI_PASSWORD="m19327743237"

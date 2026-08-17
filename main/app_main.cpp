@@ -9,10 +9,14 @@
 #include <esp_err.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include <esp_wifi.h>
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
 #include <esp_matter_ota.h>
+
+#include <setup_payload/SetupPayload.h>
+#include <setup_payload/ManualSetupPayloadGenerator.h>
 
 #include <common_macros.h>
 #include <app_bridged_device.h>
@@ -34,6 +38,15 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         ESP_LOGI(TAG, "Interface IP Address Changed");
         break;
 
+    case chip::DeviceLayer::DeviceEventType::kWiFiConnectivityChange:
+        if (event->WiFiConnectivityChange.Result == chip::DeviceLayer::kConnectivity_Established) {
+            ESP_LOGI(TAG, "WiFi connected");
+        } else if (event->WiFiConnectivityChange.Result == chip::DeviceLayer::kConnectivity_Lost) {
+            ESP_LOGI(TAG, "WiFi disconnected, reconnecting...");
+            esp_wifi_connect();
+        }
+        break;
+
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "Commissioning complete");
         break;
@@ -52,6 +65,18 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
         ESP_LOGI(TAG, "Commissioning window opened");
+        {
+            chip::SetupPayload payload;
+            chip::PayloadContents payloadContents;
+            payloadContents.setUpPINCode = 20202021;
+            payloadContents.discriminator.SetLongValue(3840);
+            payloadContents.rendezvousInformation.SetValue(chip::RendezvousInformationFlag::kBLE);
+            payloadContents.commissioningFlow = chip::CommissioningFlow::kStandard;
+            std::string manualPairingCode;
+            chip::ManualSetupPayloadGenerator generator(payloadContents);
+            generator.payloadDecimalStringRepresentation(manualPairingCode);
+            ESP_LOGI(TAG, "Manual Pairing Code: %s", manualPairingCode.c_str());
+        }
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
