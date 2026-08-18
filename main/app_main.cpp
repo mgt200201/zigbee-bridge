@@ -28,6 +28,7 @@ static const char *TAG = "app_main";
 using namespace esp_matter;
 using namespace esp_matter::attribute;
 using namespace esp_matter::endpoint;
+using namespace esp_matter::cluster;
 
 uint16_t aggregator_endpoint_id = chip::kInvalidEndpointId;
 
@@ -109,29 +110,17 @@ esp_err_t create_bridge_devices(esp_matter::endpoint_t *ep, uint32_t device_type
     esp_err_t err = ESP_OK;
 
     switch (device_type_id) {
-    case ESP_MATTER_ON_OFF_LIGHT_DEVICE_TYPE_ID: {
-        on_off_light::config_t on_off_light_conf;
-        err = on_off_light::add(ep, &on_off_light_conf);
-        break;
-    }
-    case ESP_MATTER_DIMMABLE_LIGHT_DEVICE_TYPE_ID: {
-        dimmable_light::config_t dimmable_light_conf;
-        err = dimmable_light::add(ep, &dimmable_light_conf);
-        break;
-    }
-    case ESP_MATTER_COLOR_TEMPERATURE_LIGHT_DEVICE_TYPE_ID: {
-        color_temperature_light::config_t color_temperature_light_conf;
-        err = color_temperature_light::add(ep, &color_temperature_light_conf);
-        break;
-    }
-    case ESP_MATTER_EXTENDED_COLOR_LIGHT_DEVICE_TYPE_ID: {
-        extended_color_light::config_t extended_color_light_conf;
-        err = extended_color_light::add(ep, &extended_color_light_conf);
-        break;
-    }
-    case ESP_MATTER_ON_OFF_LIGHT_SWITCH_DEVICE_TYPE_ID: {
-        on_off_light_switch::config_t switch_config;
-        err = on_off_light_switch::add(ep, &switch_config);
+    case ESP_MATTER_TEMP_HUMIDITY_SENSOR_DEVICE_TYPE_ID: {
+        temperature_measurement::config_t temp_conf;
+        temp_conf.measured_value = { static_cast<int16_t>(0) };
+        temp_conf.min_measured_value = { static_cast<int16_t>(-2000) };
+        temp_conf.max_measured_value = { static_cast<int16_t>(2000) };
+        temperature_measurement::create(ep, &temp_conf, CLUSTER_FLAG_SERVER);
+        relative_humidity_measurement::config_t humidity_conf;
+        humidity_conf.measured_value = { static_cast<uint16_t>(0) };
+        humidity_conf.min_measured_value = { static_cast<uint16_t>(0) };
+        humidity_conf.max_measured_value = { static_cast<uint16_t>(10000) };
+        relative_humidity_measurement::create(ep, &humidity_conf, CLUSTER_FLAG_SERVER);
         break;
     }
     default: {

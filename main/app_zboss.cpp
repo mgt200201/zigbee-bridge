@@ -19,8 +19,14 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_timer.h>
+#include <esp_matter.h>
 #include <zigbee_bridge.h>
 #include <app_bridged_device.h>
+
+extern uint16_t aggregator_endpoint_id;
+
+using namespace esp_matter;
+using namespace esp_matter::cluster;
 
 /* 按键配置：外接按键到 GND（低电平有效） */
 #define BUTTON_GPIO             GPIO_NUM_9
@@ -111,7 +117,25 @@ static void add_or_update_known_device(const esp_zb_ieee_addr_t ieee, uint16_t s
     ESP_LOGW(TAG, "Known device list full");
 }
 
-extern "C" void app_zboss_register_bridged_device(uint16_t short_addr)
+#define MAX_BRIDGED_ENDPOINTS 32
+typedef struct {
+    bool in_use;
+    uint16_t short_addr;
+    uint8_t zigbee_endpoint;
+} bridged_ep_map_t;
+static bridged_ep_map_t s_bridged_eps[MAX_BRIDGED_ENDPOINTS] = {0};
+
+static uint16_t find_short_addr_by_zigbee_endpoint(uint8_t zigbee_endpoint)
+{
+    for (int i = 0; i < MAX_BRIDGED_ENDPOINTS; i++) {
+        if (s_bridged_eps[i].in_use && s_bridged_eps[i].zigbee_endpoint == zigbee_endpoint) {
+            return s_bridged_eps[i].short_addr;
+        }
+    }
+    return 0xFFFF;
+}
+
+extern "C" void app_zboss_register_bridged_device(uint16_t short_addr, uint8_t zigbee_endpoint)
 {
     known_device_t *dev = find_known_device_by_short(short_addr);
     if (!dev) {
@@ -121,11 +145,19 @@ extern "C" void app_zboss_register_bridged_device(uint16_t short_addr)
                 memcpy(s_known_devices[i].ieee_addr, pending_annce_ieee, sizeof(esp_zb_ieee_addr_t));
                 s_known_devices[i].short_addr = short_addr;
                 ESP_LOGI(TAG, "Registered bridged device 0x%04hx", short_addr);
-                return;
             }
         }
-        ESP_LOGW(TAG, "Cannot register bridged device 0x%04hx, list full", short_addr);
     }
+    for (int i = 0; i < MAX_BRIDGED_ENDPOINTS; i++) {
+        if (!s_bridged_eps[i].in_use) {
+            s_bridged_eps[i].in_use = true;
+            s_bridged_eps[i].short_addr = short_addr;
+            s_bridged_eps[i].zigbee_endpoint = zigbee_endpoint;
+            ESP_LOGI(TAG, "Registered bridged zigbee ep: short_addr=0x%04hx, ep=%d", short_addr, zigbee_endpoint);
+            return;
+        }
+    }
+    ESP_LOGW(TAG, "Bridged endpoint map full");
 }
 
 static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
@@ -133,7 +165,7 @@ static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
     ESP_ERROR_CHECK(esp_zb_bdb_start_top_level_commissioning(mode_mask));
 }
 
-static void find_on_off_light_cb(uint8_t param)
+static void find_temp_humidity_sensor_cb(uint8_t param)
 {
     (void)param;
     if (pending_annce_short_addr == 0xFFFF) {
@@ -147,11 +179,16 @@ static void find_on_off_light_cb(uint8_t param)
         return;
     }
 
-    ESP_LOGI(TAG, "Discovering on/off light on 0x%04hx", short_addr);
+    ESP_LOGI(TAG, "Discovering temp/humidity sensor on 0x%04hx", short_addr);
     esp_zb_zdo_match_desc_req_param_t cmd_req;
     cmd_req.dst_nwk_addr = short_addr;
     cmd_req.addr_of_interest = short_addr;
-    esp_zb_zdo_find_on_off_light(&cmd_req, zigbee_bridge_find_bridged_on_off_light_cb, NULL);
+    cmd_req.profile_id = ESP_ZB_AF_HA_PROFILE_ID;
+    uint16_t cluster_list[] = { ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT };
+    cmd_req.num_in_clusters = 1;
+    cmd_req.num_out_clusters = 0;
+    cmd_req.cluster_list = cluster_list;
+    esp_zb_zdo_match_cluster(&cmd_req, zigbee_bridge_find_temp_humidity_sensor_cb, NULL);
 }
 
 
@@ -236,7 +273,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         /* 延迟 500ms 再发现，给 end device 留出 rejoin 后的初始化/poll 时间 */
         pending_annce_short_addr = dev_annce_params->device_short_addr;
         memcpy(pending_annce_ieee, dev_annce_params->ieee_addr, sizeof(esp_zb_ieee_addr_t));
-        esp_zb_scheduler_alarm((esp_zb_callback_t)find_on_off_light_cb, 0, 500);
+        esp_zb_scheduler_alarm((esp_zb_callback_t)find_temp_humidity_sensor_cb, 0, 500);
         break;
 
     case ESP_ZB_ZDO_SIGNAL_LEAVE_INDICATION: {
@@ -282,8 +319,8 @@ static void parse_and_log_attribute(uint8_t src_ep, uint8_t dst_ep, uint16_t clu
         }
         break;
 
-    case ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT:
-        if (attribute->id == ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID &&
+    case 0x0405:
+        if (attribute->id == 0x0000 &&
             attribute->data.size == 2) {
             uint16_t raw = *(uint16_t *)attribute->data.value;
             ESP_LOGI(TAG, "  -> Humidity: %.2f %% (raw=%u)", raw / 100.0, raw);
@@ -321,6 +358,61 @@ static esp_err_t zb_report_attr_handler(const esp_zb_zcl_report_attr_message_t *
     }
     parse_and_log_attribute(message->src_endpoint, message->dst_endpoint,
                             message->cluster, &message->attribute);
+
+    if (message->cluster != ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT &&
+        message->cluster != 0x0405) {
+        return ESP_OK;
+    }
+
+    uint16_t short_addr = find_short_addr_by_zigbee_endpoint(message->src_endpoint);
+    if (short_addr == 0xFFFF) {
+        ESP_LOGW(TAG, "Zigbee endpoint %d not found in bridged mapping", message->src_endpoint);
+        known_device_t *dev = NULL;
+        for (int i = 0; i < MAX_KNOWN_DEVICES; i++) {
+            if (s_known_devices[i].in_use) {
+                dev = &s_known_devices[i];
+                break;
+            }
+        }
+        if (dev) {
+            short_addr = dev->short_addr;
+            ESP_LOGI(TAG, "Found device short_addr=0x%04x from known devices, registering endpoint %d", short_addr, message->src_endpoint);
+            app_bridged_device_t *bridged_device = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+            if (!bridged_device) {
+                node_t *node = esp_matter::node::get();
+                if (node) {
+                    bridged_device = app_bridge_create_bridged_device(node, aggregator_endpoint_id,
+                                                                     ESP_MATTER_TEMP_HUMIDITY_SENSOR_DEVICE_TYPE_ID,
+                                                                     ESP_MATTER_BRIDGED_DEVICE_TYPE_ZIGBEE,
+                                                                     app_bridge_zigbee_address(message->src_endpoint, short_addr), NULL);
+                }
+            }
+            if (bridged_device) {
+                app_zboss_register_bridged_device(short_addr, message->src_endpoint);
+                ESP_LOGI(TAG, "Auto-registered bridged device for short_addr=0x%04x, ep=%d", short_addr, message->src_endpoint);
+            }
+        } else {
+            ESP_LOGW(TAG, "No known devices found");
+            return ESP_OK;
+        }
+    }
+
+    ESP_LOGI(TAG, "ZCL report for bridging: src_ep=%d, short_addr=0x%04x, cluster=0x%04x",
+             message->src_endpoint, short_addr, message->cluster);
+
+    if (message->cluster == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT &&
+        message->attribute.id == ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID &&
+        message->attribute.data.size == 2) {
+        int16_t raw = *(int16_t *)message->attribute.data.value;
+        zigbee_bridge_report_temp_humidity_to_matter(short_addr, message->src_endpoint,
+                                                     ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, raw);
+    } else if (message->cluster == 0x0405 &&
+               message->attribute.id == 0x0000 &&
+               message->attribute.data.size == 2) {
+        int16_t raw = *(int16_t *)message->attribute.data.value;
+        zigbee_bridge_report_temp_humidity_to_matter(short_addr, message->src_endpoint,
+                                                     0x0405, raw);
+    }
     return ESP_OK;
 }
 

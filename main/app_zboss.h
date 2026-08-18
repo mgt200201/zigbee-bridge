@@ -54,3 +54,4 @@
     }
 
 void launch_app_zboss(void);
+extern "C" void app_zboss_register_bridged_device(uint16_t short_addr, uint8_t zigbee_endpoint);
