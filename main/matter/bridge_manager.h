@@ -75,7 +75,7 @@ void bridge_manager_on_device_discovered(uint16_t short_addr, uint8_t endpoint);
 /**
  * @brief 设备标识完成回调（由 zdp_discovery 在 Read Attr 响应时调用）
  */
-void bridge_manager_on_device_identified(uint32_t device_id, const char *uiid,
+void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
                                           uint16_t short_addr, uint8_t endpoint,
                                           const esp_zb_ieee_addr_t ieee_addr);
 

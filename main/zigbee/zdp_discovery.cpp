@@ -263,7 +263,7 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
     uint8_t src_endpoint = message->info.src_endpoint;
 
     uint32_t device_id = DEVICE_ID_UNKNOWN;
-    char uiid[MAX_UIID_LEN] = {0};
+    uint16_t uiid = UIID_UNKNOWN;
     bool got_device_id = false;
     char manufacturer[MAX_NAME_LEN] = {0};
     char model[MAX_NAME_LEN] = {0};
@@ -311,24 +311,11 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
             }
             break;
 
-        case 0x4001:
+        case ZB_BASIC_ATTR_DEVICE_ID:
             if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && var->attribute.data.size >= 4) {
                 device_id = *(uint32_t *)var->attribute.data.value;
                 got_device_id = true;
                 ESP_LOGI(TAG, "  -> deviceId (0x4001): 0x%08X", (unsigned int)device_id);
-            }
-            break;
-
-        case 0x4002:
-            if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && var->attribute.data.size > 0) {
-                uint8_t *data = (uint8_t *)var->attribute.data.value;
-                uint8_t len = data[0];
-                if (len > 0) {
-                    uint8_t copy_len = (len < MAX_UIID_LEN - 1) ? len : (MAX_UIID_LEN - 1);
-                    memcpy(uiid, &data[1], copy_len);
-                    uiid[copy_len] = '\0';
-                }
-                ESP_LOGI(TAG, "  -> uiid (0x4002): %.*s", len, &data[1]);
             }
             break;
 
@@ -340,6 +327,12 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
 
     /* 调用 Matter 层处理设备标识 */
     if (got_device_id && device_id != DEVICE_ID_UNKNOWN && device_id != 0) {
+        /* 根据 Model 字符串查 uiid（如 "TH-01" → 0x0001） */
+        uint16_t detected_uiid = device_info_lookup_uiid(model);
+        if (detected_uiid != UIID_UNKNOWN) {
+            uiid = detected_uiid;
+            ESP_LOGI(TAG, "  -> uiid (from model): 0x%04X", uiid);
+        }
         known_device_t *known = zboss_manager_find_by_short(short_addr);
         bridge_manager_on_device_identified(device_id, uiid, short_addr, src_endpoint,
                                             known ? known->ieee_addr : NULL);
@@ -380,8 +373,7 @@ void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint)
         ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID,
         ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID,
         ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID,
-        0x4001,
-        0x4002,
+        ZB_BASIC_ATTR_DEVICE_ID,
     };
 
     esp_zb_zcl_read_attr_cmd_t cmd_req;

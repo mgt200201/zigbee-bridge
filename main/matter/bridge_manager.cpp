@@ -205,7 +205,7 @@ void bridge_manager_on_device_discovered(uint16_t short_addr, uint8_t endpoint)
     zdp_discovery_read_basic_attributes(short_addr, endpoint);
 }
 
-void bridge_manager_on_device_identified(uint32_t device_id, const char *uiid,
+void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
                                           uint16_t short_addr, uint8_t endpoint,
                                           const esp_zb_ieee_addr_t ieee_addr)
 {
@@ -226,9 +226,8 @@ void bridge_manager_on_device_identified(uint32_t device_id, const char *uiid,
             zboss_manager_register_bridged_device(short_addr, endpoint);
         }
 
-        if (info->uiid[0] == '\0' && uiid && uiid[0] != '\0') {
-            strncpy(info->uiid, uiid, MAX_UIID_LEN - 1);
-            info->uiid[MAX_UIID_LEN - 1] = '\0';
+        if (info->uiid == UIID_UNKNOWN && uiid != UIID_UNKNOWN) {
+            info->uiid = uiid;
         }
 
         ESP_LOGI(TAG, "Device reconnected: device_id=0x%08X, Matter ep=%d",

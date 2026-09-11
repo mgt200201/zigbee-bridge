@@ -24,16 +24,22 @@ extern "C" {
 #define MAX_DEVICE_INFO        32
 
 /**
+ * @def ZB_BASIC_ATTR_DEVICE_ID
+ * @brief Zigbee Basic 集群中设备 ID 属性的属性 ID
+ */
+#define ZB_BASIC_ATTR_DEVICE_ID    0x4001
+
+/**
  * @def DEVICE_ID_UNKNOWN
  * @brief 无效的 deviceId 标记值
  */
 #define DEVICE_ID_UNKNOWN      0xFFFFFFFF
 
 /**
- * @def MAX_UIID_LEN
- * @brief UIID 字符串最大长度
+ * @def UIID_UNKNOWN
+ * @brief 无效的 uiid 标记值
  */
-#define MAX_UIID_LEN           64
+#define UIID_UNKNOWN           0xFFFF
 
 /**
  * @def MAX_NAME_LEN
@@ -45,13 +51,14 @@ extern "C" {
  * @brief 设备信息结构体
  *
  * 存储一个 Zigbee 设备的核心信息，用于桥接到 Matter。
- * - deviceId 和 uiid 来自 Basic cluster 属性 0x4001/0x4002
+ * - deviceId 来自 Basic cluster 属性 0x4001
+ * - uiid 根据 Model Identifier 映射得到（不读 0x4002）
  * - deviceId 和 uiid 会持久化到 NVS，网关重启后可恢复
  * - 制造商、型号、软件版本等非关键信息不持久化
  */
 typedef struct {
     uint32_t device_id;                     /**< 设备ID (Basic 0x4001)，DEVICE_ID_UNKNOWN 表示未获取 */
-    char uiid[MAX_UIID_LEN];                /**< 设备UIID (Basic 0x4002) */
+    uint16_t uiid;                          /**< 设备UIID，根据型号映射得到，UIID_UNKNOWN 表示未知 */
     bool online;                            /**< 当前是否在线 */
     uint16_t short_addr;                    /**< 当前Zigbee短地址（可能随重加入网变化） */
     uint8_t zigbee_endpoint;                /**< Zigbee 端点号 */
@@ -99,13 +106,13 @@ device_info_t *device_info_find_by_ieee(const esp_zb_ieee_addr_t ieee);
  * 如果 deviceId 已存在，则更新在线状态和网络地址。
  *
  * @param device_id 设备ID (Basic 0x4001)
- * @param uiid 设备UIID (Basic 0x4002)，可为空字符串
+ * @param uiid 设备UIID（根据型号映射得到，为 0 表示未知）
  * @param short_addr 当前Zigbee短地址
  * @param zigbee_endpoint Zigbee端点号
  * @param ieee_addr IEEE 64位地址
  * @return 返回设备信息指针，失败返回 NULL
  */
-device_info_t *device_info_register(uint32_t device_id, const char *uiid,
+device_info_t *device_info_register(uint32_t device_id, uint16_t uiid,
                                      uint16_t short_addr, uint8_t zigbee_endpoint,
                                      const esp_zb_ieee_addr_t ieee_addr);
 
@@ -155,11 +162,22 @@ int device_info_get_online_count(void);
 int device_info_get_count(void);
 
 /**
- * @brief 遍历所有设备信息
- * @param index 索引 (0 ~ get_count()-1)
- * @return 设备信息指针，超出范围返回 NULL
+ * @brief 根据索引获取设备信息
+ * @param index 索引（0 ~ get_count()-1）
+ * @return 设备信息指针，越界返回 NULL
  */
 device_info_t *device_info_get_by_index(int index);
+
+/**
+ * @brief 根据 Basic 集群 Model Identifier 属性值查找对应的 uiid
+ *
+ * 例如 model="TH-01" → uiid=0x0001。
+ * 不通过读取 0x4002 属性，而是根据已知型号映射表查找。
+ *
+ * @param model 设备型号字符串（Basic 0x0005）
+ * @return uint16_t uiid 值，未知型号返回 UIID_UNKNOWN (0xFFFF)
+ */
+uint16_t device_info_lookup_uiid(const char *model);
 
 #ifdef __cplusplus
 }

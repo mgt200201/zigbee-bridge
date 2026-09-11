@@ -67,7 +67,7 @@ void device_info_init(void)
     /* 遍历所有可能的 key，查找 uiid_xxxx 模式的条目 */
     int restored_count = 0;
     nvs_iterator_t it = NULL;
-    esp_err_t iter_err = nvs_entry_find(NVS_DEFAULT_PART_NAME, NVS_NAMESPACE, NVS_TYPE_STR, &it);
+    esp_err_t iter_err = nvs_entry_find(NVS_DEFAULT_PART_NAME, NVS_NAMESPACE, NVS_TYPE_U16, &it);
     while (iter_err == ESP_OK) {
         nvs_entry_info_t info;
         nvs_entry_info(it, &info);
@@ -77,15 +77,15 @@ void device_info_init(void)
             unsigned int tmp_id;
             if (sscanf(info.key + strlen(NVS_KEY_UIID_PREFIX), "%08X", &tmp_id) == 1) {
                 device_id = tmp_id;
-                char uiid[MAX_UIID_LEN] = {0};
-                size_t len = sizeof(uiid);
-                err = nvs_get_str(handle, info.key, uiid, &len);
+                uint16_t uiid = UIID_UNKNOWN;
+                err = nvs_get_u16(handle, info.key, &uiid);
                 if (err == ESP_OK) {
                     int slot = find_free_slot();
                     if (slot >= 0) {
                         device_info_t *dev = &s_device_infos[slot];
                         dev->in_use = true;
                         dev->device_id = device_id;
+                        dev->uiid = uiid;
                         dev->online = false;  /* 初始离线，等待设备入网 */
                         dev->short_addr = 0xFFFF;
                         dev->zigbee_endpoint = 0;
@@ -94,10 +94,8 @@ void device_info_init(void)
                         dev->manufacturer[0] = '\0';
                         dev->model[0] = '\0';
                         dev->sw_version[0] = '\0';
-                        strncpy(dev->uiid, uiid, MAX_UIID_LEN - 1);
-                        dev->uiid[MAX_UIID_LEN - 1] = '\0';
                         restored_count++;
-                        ESP_LOGI(TAG, "Restored device: device_id=0x%08X, uiid=%.32s", (unsigned int)device_id, uiid);
+                        ESP_LOGI(TAG, "Restored device: device_id=0x%08X, uiid=0x%04X", (unsigned int)device_id, uiid);
                     } else {
                         ESP_LOGW(TAG, "Device info table full, cannot restore device_id=0x%08X", (unsigned int)device_id);
                     }
@@ -149,7 +147,7 @@ device_info_t *device_info_find_by_ieee(const esp_zb_ieee_addr_t ieee)
     return NULL;
 }
 
-device_info_t *device_info_register(uint32_t device_id, const char *uiid,
+device_info_t *device_info_register(uint32_t device_id, uint16_t uiid,
                                      uint16_t short_addr, uint8_t zigbee_endpoint,
                                      const esp_zb_ieee_addr_t ieee_addr)
 {
@@ -176,6 +174,7 @@ device_info_t *device_info_register(uint32_t device_id, const char *uiid,
     device_info_t *dev = &s_device_infos[slot];
     dev->in_use = true;
     dev->device_id = device_id;
+    dev->uiid = uiid;
     dev->online = true;
     dev->short_addr = short_addr;
     dev->zigbee_endpoint = zigbee_endpoint;
@@ -185,36 +184,29 @@ device_info_t *device_info_register(uint32_t device_id, const char *uiid,
     dev->model[0] = '\0';
     dev->sw_version[0] = '\0';
 
-    if (uiid) {
-        strncpy(dev->uiid, uiid, MAX_UIID_LEN - 1);
-        dev->uiid[MAX_UIID_LEN - 1] = '\0';
-    } else {
-        dev->uiid[0] = '\0';
-    }
-
     /* 持久化到 NVS */
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err == ESP_OK) {
         char key[16];
         make_nvs_key(device_id, key);
-        err = nvs_set_str(handle, key, dev->uiid);
+        err = nvs_set_u16(handle, key, dev->uiid);
         if (err == ESP_OK) {
             err = nvs_commit(handle);
             if (err == ESP_OK) {
-                ESP_LOGI(TAG, "Persisted device: device_id=0x%08X, uiid=%.32s", (unsigned int)device_id, dev->uiid);
+                ESP_LOGI(TAG, "Persisted device: device_id=0x%08X, uiid=0x%04X", (unsigned int)device_id, dev->uiid);
             } else {
                 ESP_LOGW(TAG, "NVS commit failed: %s", esp_err_to_name(err));
             }
         } else {
-            ESP_LOGW(TAG, "NVS set_str failed: %s", esp_err_to_name(err));
+            ESP_LOGW(TAG, "NVS set_u16 failed: %s", esp_err_to_name(err));
         }
         nvs_close(handle);
     } else {
         ESP_LOGW(TAG, "Failed to open NVS for write: %s", esp_err_to_name(err));
     }
 
-    ESP_LOGI(TAG, "Registered new device: device_id=0x%08X, uiid=%s, short_addr=0x%04hx",
+    ESP_LOGI(TAG, "Registered new device: device_id=0x%08X, uiid=0x%04X, short_addr=0x%04hx",
              (unsigned int)device_id, dev->uiid, short_addr);
     return dev;
 }
@@ -301,4 +293,33 @@ device_info_t *device_info_get_by_index(int index)
         }
     }
     return NULL;
+}
+
+/* ==================== 设备型号识别（基于 model 字符串） ==================== */
+
+uint16_t device_info_lookup_uiid(const char *model)
+{
+    if (!model || model[0] == '\0') {
+        return UIID_UNKNOWN;
+    }
+
+    /* 型号 → uiid 映射表（可根据需要扩展）
+     * model 来自 Basic 集群属性 0x0005（Model Identifier）
+     * uiid 用于区分设备功能类型
+     */
+    static const struct {
+        const char *model;
+        uint16_t uiid;
+    } s_model_uiid_map[] = {
+        { "TH-01", 0x0001 },       /* 温湿度传感器 */
+        /* 后续设备型号在这里添加 */
+    };
+
+    for (size_t i = 0; i < sizeof(s_model_uiid_map) / sizeof(s_model_uiid_map[0]); i++) {
+        if (strcmp(model, s_model_uiid_map[i].model) == 0) {
+            return s_model_uiid_map[i].uiid;
+        }
+    }
+
+    return UIID_UNKNOWN;
 }
