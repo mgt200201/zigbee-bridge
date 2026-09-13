@@ -6,6 +6,23 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 
+/**
+ * @file zboss_manager.h
+ *
+ * @brief Zigbee 管理层统一入口（Facade）
+ *
+ * 本文件是 Zigbee 管理层的公共 API 入口。
+ * 具体实现已按单一职责拆分为子模块：
+ *   - zigbee_network.h/.cpp  → 网络状态 + Steering 管理
+ *   - zigbee_device_db.h/.cpp → 已知设备数据库 + 端点映射
+ *
+ * 本文件保留：
+ *   - 配置宏 (HA_GW_ENDPOINT, ESP_ZB_ZC_CONFIG 等)
+ *   - 生命周期 API (zboss_manager_start)
+ *   - 信号处理入口 (esp_zb_app_signal_handler)
+ *   - 向后兼容的 thin wrapper
+ */
+
 #pragma once
 
 #include <esp_err.h>
@@ -13,24 +30,20 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "zigbee_network.h"
+#include "zigbee_device_db.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* ==================== 配置参数 ==================== */
 
-/** 网关 Zigbee endpoint，用于接收子设备报告 */
 #define HA_GW_ENDPOINT          1
-/** 最大子设备数量 */
 #define MAX_CHILDREN            10
-/** 安装码策略开关 */
 #define INSTALLCODE_POLICY_ENABLE false
-/** Zigbee 主信道掩码 */
 #define ESP_ZB_PRIMARY_CHANNEL_MASK (1l << 13)
 
-/**
- * @brief Zigbee 协调器配置宏
- */
 #define ESP_ZB_ZC_CONFIG()                                      \
     {                                                           \
         .esp_zb_role = ESP_ZB_DEVICE_TYPE_COORDINATOR,          \
@@ -40,130 +53,87 @@ extern "C" {
         },                                                      \
     }
 
+/* ==================== 向后兼容类型别名 ==================== */
+
+#define MAX_KNOWN_DEVICES ZIGBEE_DB_MAX_DEVICES
+typedef zigbee_db_device_t known_device_t;
+typedef zigbee_net_steering_cb_t steering_state_callback_t;
+
 /* ==================== 生命周期 ==================== */
 
-/**
- * @brief 启动 Zigbee BOSS 服务
- *
- * 初始化 Zigbee 平台配置，创建 zboss_task，启动协议栈。
- * 此函数不会阻塞，协议栈在其自己的 FreeRTOS 任务中运行。
- */
 void zboss_manager_start(void);
-
-/**
- * @brief Zigbee 协议栈信号处理函数
- *
- * 由 ZBOSS 回调，处理网络组建、设备入网/离网等信号。
- */
 void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct);
 
-/* ==================== 网络管理 ==================== */
+/* ==================== 网络管理（thin wrapper → zigbee_network） ==================== */
 
-/** @return true 网络已组建完成 */
-bool zboss_manager_is_network_formed(void);
+static inline bool zboss_manager_is_network_formed(void)
+{
+    return zigbee_net_is_formed();
+}
 
-/** @return true 入网窗口已开放 */
-bool zboss_manager_is_steering_active(void);
+static inline bool zboss_manager_is_steering_active(void)
+{
+    return zigbee_net_is_steering();
+}
 
-/**
- * @brief 开放入网窗口
- *
- * 通过 ZBOSS scheduler 发起 BDB Network Steering。
- * 窗口持续 STEERING_DURATION_SEC 秒后自动关闭。
- */
-void zboss_manager_start_steering(void);
+static inline void zboss_manager_start_steering(void)
+{
+    zigbee_net_start_steering();
+}
 
-/**
- * @brief 立即关闭入网窗口
- */
-void zboss_manager_stop_steering(void);
+static inline void zboss_manager_stop_steering(void)
+{
+    zigbee_net_stop_steering();
+}
 
-/* ==================== 已知设备管理 ==================== */
+static inline bool zboss_manager_steering_is_expired(void)
+{
+    return zigbee_net_steering_expired();
+}
 
-/** 最大缓存的已知设备数量 */
-#define MAX_KNOWN_DEVICES 16
+static inline void zboss_manager_register_steering_callback(steering_state_callback_t cb)
+{
+    zigbee_net_register_steering_cb(cb);
+}
 
-/**
- * @brief 已知设备结构体
- */
-typedef struct {
-    bool in_use;
-    esp_zb_ieee_addr_t ieee_addr;
-    uint16_t short_addr;
-} known_device_t;
+static inline void zboss_manager_handle_short_press(void)
+{
+    zigbee_net_handle_button();
+}
 
-/** @return 已知设备列表指针 */
-known_device_t *zboss_manager_get_known_devices(void);
+/* ==================== 设备管理（thin wrapper → zigbee_device_db） ==================== */
 
-/**
- * @brief 根据 IEEE 地址查找已知设备
- */
-known_device_t *zboss_manager_find_by_ieee(const esp_zb_ieee_addr_t ieee);
+static inline known_device_t *zboss_manager_get_known_devices(void)
+{
+    return zigbee_db_get_all();
+}
 
-/**
- * @brief 根据短地址查找已知设备
- */
-known_device_t *zboss_manager_find_by_short(uint16_t short_addr);
+static inline known_device_t *zboss_manager_find_by_ieee(const esp_zb_ieee_addr_t ieee)
+{
+    return zigbee_db_find_by_ieee(ieee);
+}
 
-/* ==================== 桥接端点映射 ==================== */
+static inline known_device_t *zboss_manager_find_by_short(uint16_t short_addr)
+{
+    return zigbee_db_find_by_short(short_addr);
+}
 
-/**
- * @brief 注册桥接设备到 Zigbee BOSS
- *
- * 将 Zigbee 设备（短地址+端点）注册到内部映射表中，
- * 使后续的 ZCL 报告能够正确路由到对应的 Matter 桥接设备。
- *
- * @param short_addr Zigbee 设备短地址
- * @param zigbee_endpoint Zigbee 设备端点号
- */
-void zboss_manager_register_bridged_device(uint16_t short_addr, uint8_t zigbee_endpoint);
+/* ==================== 端点映射（thin wrapper → zigbee_device_db） ==================== */
 
-/**
- * @brief 根据 Zigbee 端点号查找对应的短地址
- * @param zigbee_endpoint Zigbee 端点号
- * @return 找到返回短地址，未找到返回 0xFFFF
- */
-uint16_t zboss_manager_find_short_addr_by_ep(uint8_t zigbee_endpoint);
+static inline void zboss_manager_register_bridged_device(uint16_t short_addr, uint8_t ep)
+{
+    zigbee_db_register_ep(short_addr, ep);
+}
 
-/**
- * @brief 根据短地址查找对应的 Zigbee 端点号
- * @param short_addr Zigbee 短地址
- * @return 找到返回端点号，未找到返回 0xFF
- */
-uint8_t zboss_manager_find_ep_by_short(uint16_t short_addr);
+static inline uint16_t zboss_manager_find_short_addr_by_ep(uint8_t ep)
+{
+    return zigbee_db_short_by_ep(ep);
+}
 
-/* ==================== Steering 状态回调（供 LED 反馈等） ==================== */
-
-/**
- * @brief Steering 状态变化回调类型
- * @param active true=入网窗口开放中, false=已关闭
- */
-typedef void (*steering_state_callback_t)(bool active);
-
-/**
- * @brief 注册 Steering 状态变化回调
- *
- * 用于 LED 闪烁等外部反馈。当 zboss_manager 内部状态变化时自动调用。
- *
- * @param cb 回调函数指针，传入 NULL 可取消注册
- */
-void zboss_manager_register_steering_callback(steering_state_callback_t cb);
-
-/**
- * @brief 检查 Steering 是否已超时
- * @return true 已超时
- */
-bool zboss_manager_steering_is_expired(void);
-
-/* ==================== 按键处理（由 app_main 路由） ==================== */
-
-/**
- * @brief 处理按键短按事件
- *
- * 切换 Steering 入网窗口的开启/关闭。
- * 当网络未组建时无操作。
- */
-void zboss_manager_handle_short_press(void);
+static inline uint8_t zboss_manager_find_ep_by_short(uint16_t short_addr)
+{
+    return zigbee_db_ep_by_short(short_addr);
+}
 
 #ifdef __cplusplus
 }

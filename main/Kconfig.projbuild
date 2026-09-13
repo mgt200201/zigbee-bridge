@@ -31,4 +31,95 @@ menu "ESP Matter Zigbee Bridge Example"
 
     endmenu
 
+    menu "Zigbee Gateway Configuration"
+        config ZIGBEE_ANNCE_DELAY_MS
+            int "Device announce debounce delay (ms)"
+            default 500
+            range 100 5000
+            help
+                Delay in milliseconds after receiving a Device Annce before starting
+                endpoint discovery.  A longer delay gives the device more time to
+                stabilize after joining the network.
+
+        config ZIGBEE_MAX_ENDPOINT_PROBE
+            int "Max endpoints to probe during discovery"
+            default 5
+            range 1 20
+            help
+                Maximum number of endpoints to probe sequentially when discovering
+                a new device.  Zigbee HA/SE devices typically have 1-5 endpoints.
+
+        config ZIGBEE_DISCOVERY_MAX_RETRIES
+            int "Max discovery retries"
+            default 3
+            range 0 10
+            help
+                Maximum number of times to retry discovery when a Simple Descriptor
+                request fails.  0 disables retries.  Each retry uses exponential
+                backoff (base delay * 2^retry).
+
+        config ZIGBEE_DISCOVERY_RETRY_BASE_MS
+            int "Discovery retry base delay (ms)"
+            default 1000
+            range 200 10000
+            help
+                Base delay in milliseconds for discovery retry exponential backoff.
+                Actual delay = base * 2^retry_count (e.g. 1s, 2s, 4s, 8s...).
+
+        config ZIGBEE_MAX_HANDLERS
+            int "Max ZCL device handlers"
+            default 32
+            range 8 64
+            help
+                Maximum number of registered ZCL device handlers.  Each handler
+                corresponds to one cluster ID.  Typical gateways need 8-16 handlers.
+
+        config ZIGBEE_METRICS_DUMP_INTERVAL_S
+            int "Metrics auto-dump interval (seconds, 0=disable)"
+            default 0
+            range 0 3600
+            help
+                Periodically dump runtime metrics to the log.  Set to 0 to disable
+                automatic dumps (dump manually via zcl_metrics_dump()).
+    endmenu
+
+    menu "OTA Firmware Upgrade"
+        config OTA_FW_UPGRADE_URL
+            string "Firmware upgrade URL"
+            default "https://example.com/firmware.bin"
+            help
+                HTTPS URL pointing to the latest firmware binary.
+                Must use HTTPS in production for security.
+
+        config OTA_HTTP_TIMEOUT_MS
+            int "HTTP timeout (ms) for OTA download"
+            default 30000
+            range 5000 120000
+            help
+                Timeout for each HTTP request during OTA check/download.
+
+        config OTA_HTTP_BUFFER_SIZE
+            int "HTTP buffer size for OTA download"
+            default 4096
+            range 1024 16384
+            help
+                Buffer size for HTTP OTA download.  Larger buffers increase
+                speed at the cost of RAM (buffer is stack-allocated during download).
+
+        config OTA_AUTO_CHECK_HOURS
+            int "Auto OTA check interval (hours, 0=disable)"
+            default 0
+            range 0 168
+            help
+                Periodically check for new firmware.  Set to 0 to disable.
+                Recommended: 24 (daily) for production.
+
+        config OTA_HTTPS_CERT_PEM
+            string "HTTPS server certificate (PEM)"
+            default ""
+            help
+                PEM-encoded server certificate for TLS verification.
+                Leave empty to disable TLS verification (development only).
+    endmenu
+
 endmenu

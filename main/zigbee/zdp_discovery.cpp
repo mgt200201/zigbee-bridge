@@ -11,47 +11,91 @@
  *
  * @brief Zigbee 设备发现与 ZCL 处理层
  *
- * 负责 ZDP 设备发现（Match Descriptor / Simple Descriptor）、
- * ZCL 属性报告接收、Read Attributes 响应解析。
+ * 职责：
+ *   1. 监听设备入网 → 顺序探测端点 (1~MAX) → Simple Descriptor → 创建桥接
+ *   2. 读取 Basic 属性获取设备标识
+ *   3. 将 ZCL 消息分发到 zcl_handler_registry（不硬编码 if-else）
  *
- * 当发现新设备或收到数据时，调用 matter/bridge_manager 接口
- * 完成桥接设备创建或属性更新。
- *
- * 本层是 Zigbee 协议栈的最上层，直接调用 Matter 层接口。
+ * 生产级特性：
+ *   - Kconfig 控制：探测端点数、延迟时间、重试次数
+ *   - 指数退避重试：Simple Descriptor 超时/失败自动重试
+ *   - Metrics 记录：发现成功率、重试次数
+ *   - 日志分级：INFO 正常、WARN 重试、ERROR 失败
  */
 
 #include "zdp_discovery.h"
+#include "zcl_handler_registry.h"
+#include "zcl_metrics.h"
 #include <zboss_manager.h>
 #include <bridge_manager.h>
+#include <device_info.h>
 #include <string.h>
 #include <esp_log.h>
 #include <zdo/esp_zigbee_zdo_command.h>
-#include <ha/esp_zigbee_ha_standard.h>
-#include <device_info.h>
 
 static const char *TAG = "zdp_discovery";
 
-/** 待处理的设备公告数据 */
-static uint16_t s_pending_annce_short_addr = 0xFFFF;
-static esp_zb_ieee_addr_t s_pending_annce_ieee = {0};
+/* ==================== Kconfig 默认值 ==================== */
 
-/* ==================== 内部函数声明 ==================== */
-static void find_temp_humidity_sensor_cb(uint8_t param);
-static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message);
-static esp_err_t zb_set_attr_value_handler(const esp_zb_zcl_set_attr_value_message_t *message);
-static esp_err_t zb_report_attr_handler(const esp_zb_zcl_report_attr_message_t *message);
-static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_message_t *message);
-static void parse_and_log_attribute(uint8_t src_ep, uint8_t dst_ep, uint16_t cluster, const esp_zb_zcl_attribute_t *attribute);
+#ifndef CONFIG_ZIGBEE_MAX_ENDPOINT_PROBE
+#define CONFIG_ZIGBEE_MAX_ENDPOINT_PROBE 5
+#endif
 
-/* ==================== Simple Descriptor 响应回调 ==================== */
+#ifndef CONFIG_ZIGBEE_ANNCE_DELAY_MS
+#define CONFIG_ZIGBEE_ANNCE_DELAY_MS 500
+#endif
+
+#ifndef CONFIG_ZIGBEE_DISCOVERY_MAX_RETRIES
+#define CONFIG_ZIGBEE_DISCOVERY_MAX_RETRIES 3
+#endif
+
+#ifndef CONFIG_ZIGBEE_DISCOVERY_RETRY_BASE_MS
+#define CONFIG_ZIGBEE_DISCOVERY_RETRY_BASE_MS 1000
+#endif
+
+/* ==================== 发现上下文（重试支持） ==================== */
 
 /**
- * @brief Simple Descriptor 响应回调
+ * @brief 每个设备的发现上下文
  *
- * 在 Match Descriptor 成功后，发送 Simple Descriptor Request，
- * 此回调接收并解析子设备的 Simple Descriptor 信息，
- * 然后创建 Matter 桥接设备并读取 Basic 属性。
+ * 因为 ZDO Simple Desc 响应是异步的，context 必须用静态存储（不能放栈上）。
+ * 我们用全局数组管理，最多同时跟踪 1 个设备的发现状态（简化方案）。
+ *
+ * 更复杂的产品级实现会用 hash 表按 short_addr 索引多个上下文。
  */
+typedef struct {
+    uint16_t short_addr;
+    uint8_t  retry_count;        /**< 当前已重试次数 */
+    bool     in_progress;        /**< 发现进行中（防止重入） */
+} discovery_ctx_t;
+
+/** 全局发现上下文（单设备） */
+static discovery_ctx_t s_discovery_ctx = {
+    .short_addr = 0xFFFF,
+    .retry_count = 0,
+    .in_progress = false,
+};
+
+/* ==================== 状态 ==================== */
+
+/** 待处理的设备公告数据 */
+static uint16_t s_pending_annce_short_addr = 0xFFFF;
+
+/* ==================== 内部函数声明 ==================== */
+static void discover_device_cb(uint8_t param);
+static void simple_desc_cb(esp_zb_zdp_status_t zdo_status,
+                           esp_zb_af_simple_desc_1_1_t *simple_desc,
+                           void *user_ctx);
+static void probe_next_endpoint(uint16_t short_addr, uint8_t next_ep);
+static void retry_probe_cb(uint8_t param);
+static void discover_done_cb(uint8_t param);
+static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
+                                   const void *message);
+static esp_err_t zb_read_attr_resp_handler(
+    const esp_zb_zcl_cmd_read_attr_resp_message_t *message);
+
+/* ==================== Simple Descriptor 响应 ==================== */
+
 static void simple_desc_cb(esp_zb_zdp_status_t zdo_status,
                            esp_zb_af_simple_desc_1_1_t *simple_desc,
                            void *user_ctx)
@@ -59,68 +103,151 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status,
     uint16_t addr = (uint16_t)(uintptr_t)user_ctx;
 
     if (zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS || !simple_desc) {
-        ESP_LOGW(TAG, "Simple Descriptor request failed for 0x%04x (status=%d)", addr, zdo_status);
+        ESP_LOGI(TAG, "Simple Desc probe: ep=%d, status=%d for 0x%04x (no such endpoint)",
+                 s_discovery_ctx.in_progress ? s_discovery_ctx.retry_count + 1 : 0,
+                 zdo_status, addr);
         return;
     }
 
     uint8_t endpoint = simple_desc->endpoint;
 
-    /* 打印 Simple Descriptor 信息 */
+    /* 打印完整的 Simple Descriptor 信息 */
     ESP_LOGI(TAG, "=== Simple Descriptor for device 0x%04x, endpoint=%d ===", addr, endpoint);
-    ESP_LOGI(TAG, "  Profile ID:    0x%04x", simple_desc->app_profile_id);
-    ESP_LOGI(TAG, "  Device ID:     0x%04x", simple_desc->app_device_id);
-    ESP_LOGI(TAG, "  Input Clusters:  %d", simple_desc->app_input_cluster_count);
+    ESP_LOGI(TAG, "  Profile: 0x%04x, Device: 0x%04x",
+             simple_desc->app_profile_id, simple_desc->app_device_id);
+    ESP_LOGI(TAG, "  Input Clusters (%d):", simple_desc->app_input_cluster_count);
     for (int i = 0; i < simple_desc->app_input_cluster_count; i++) {
-        ESP_LOGI(TAG, "    [%d] 0x%04x", i, simple_desc->app_cluster_list[i]);
+        uint16_t cid = simple_desc->app_cluster_list[i];
+        ESP_LOGI(TAG, "    [%d] 0x%04x", i, cid);
     }
 
-    /* 调用 Matter 层创建桥接设备并读取 Basic 属性 */
+    /* 找到了一个端点 → 重置重试计数 */
+    s_discovery_ctx.retry_count = 0;
+    s_discovery_ctx.in_progress = false;
+
+    /* 创建 Matter 桥接设备 + 读取 Basic 属性 */
     bridge_manager_on_device_discovered(addr, endpoint);
+
+    zcl_metrics_record_discovery(true);
 }
 
-/* ==================== Match Descriptor 响应回调 ==================== */
+/* ==================== 端点顺序探测 ==================== */
 
 /**
- * @brief Match Descriptor 响应回调
+ * @brief 顺序探测设备的端点
  *
- * 由 ZDO Match Descriptor 请求触发，成功时发送 Simple Descriptor Request。
+ * 从 endpoint=1 开始，依次向设备发送 Simple Descriptor Request。
+ * 所有请求发送完后，由 discover_done_cb 定时器检查是否发现成功。
+ *
+ * @param short_addr  设备短地址
+ * @param next_ep     当前要探测的端点号（从 1 开始）
  */
-static void match_desc_resp_cb(esp_zb_zdp_status_t zdo_status,
-                               uint16_t addr, uint8_t endpoint,
-                               void *user_ctx)
+static void probe_next_endpoint(uint16_t short_addr, uint8_t next_ep)
 {
-    ESP_LOGI(TAG, "Match Desc response: addr=0x%04x, ep=%d, status=%d",
-             addr, endpoint, zdo_status);
-
-    if (zdo_status == ESP_ZB_ZDP_STATUS_SUCCESS) {
-        /* 发送 Simple Descriptor Request 获取完整的端点信息 */
-        esp_zb_zdo_simple_desc_req_param_t req;
-        req.addr_of_interest = addr;
-        req.endpoint = endpoint;
-        esp_zb_zdo_simple_desc_req(&req, simple_desc_cb, (void *)(uintptr_t)addr);
+    if (next_ep > CONFIG_ZIGBEE_MAX_ENDPOINT_PROBE) {
+        ESP_LOGI(TAG, "All endpoint probes sent for 0x%04x", short_addr);
+        return;
     }
+
+    ESP_LOGI(TAG, "Probing endpoint %d of device 0x%04x...", next_ep, short_addr);
+
+    esp_zb_zdo_simple_desc_req_param_t req;
+    req.addr_of_interest = short_addr;
+    req.endpoint = next_ep;
+    esp_zb_zdo_simple_desc_req(&req, simple_desc_cb, (void *)(uintptr_t)short_addr);
+
+    /* 立即探测下一个端点（协议栈会自动排队） */
+    probe_next_endpoint(short_addr, next_ep + 1);
 }
 
-/* ==================== 设备发现调度 ==================== */
+/* ==================== 重试机制（定时器 + 指数退避） ==================== */
 
 /**
- * @brief 延迟执行的设备发现函数
+ * @brief 重试探测回调
  *
- * 由 scheduler 在收到 Device Annce 后 500ms 调用，
- * 向目标设备发送 ZDO Match Descriptor 请求。
+ * 在指数退避延迟后被调度，重新发送 Simple Desc 请求。
+ * 使用全局上下文 s_discovery_ctx。
  */
-static void find_temp_humidity_sensor_cb(uint8_t param)
+static void retry_probe_cb(uint8_t param)
 {
     (void)param;
+
+    if (!s_discovery_ctx.in_progress) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Retry probe for 0x%04x (attempt %d/%d)",
+             s_discovery_ctx.short_addr,
+             s_discovery_ctx.retry_count,
+             CONFIG_ZIGBEE_DISCOVERY_MAX_RETRIES);
+
+    probe_next_endpoint(s_discovery_ctx.short_addr, 1);
+
+    /* 再次调度超时检查 */
+    esp_zb_scheduler_alarm(discover_done_cb, 0,
+                           CONFIG_ZIGBEE_DISCOVERY_RETRY_BASE_MS);
+}
+
+/**
+ * @brief 发现完成/超时检查回调
+ *
+ * 在发送完所有 Simple Desc 请求后延迟一段时间调用。
+ * 如果 simple_desc_cb 已经成功处理（in_progress == false），说明发现成功。
+ * 否则触发指数退避重试。
+ */
+static void discover_done_cb(uint8_t param)
+{
+    (void)param;
+
+    if (!s_discovery_ctx.in_progress) {
+        return;     /* 已经成功，无需处理 */
+    }
+
+    /* 还没成功 → 检查是否需要重试 */
+    s_discovery_ctx.retry_count++;
+    if (s_discovery_ctx.retry_count > CONFIG_ZIGBEE_DISCOVERY_MAX_RETRIES) {
+        ESP_LOGW(TAG, "Discovery failed for 0x%04x after %d retries",
+                 s_discovery_ctx.short_addr,
+                 CONFIG_ZIGBEE_DISCOVERY_MAX_RETRIES);
+        s_discovery_ctx.in_progress = false;
+        zcl_metrics_record_discovery(false);
+        return;
+    }
+
+    /* 指数退避延迟 */
+    uint32_t delay = CONFIG_ZIGBEE_DISCOVERY_RETRY_BASE_MS
+                     * (1 << (s_discovery_ctx.retry_count - 1));
+
+    ESP_LOGW(TAG, "Discovery retry %d/%d for 0x%04x in %lu ms",
+             s_discovery_ctx.retry_count,
+             CONFIG_ZIGBEE_DISCOVERY_MAX_RETRIES,
+             s_discovery_ctx.short_addr,
+             (unsigned long)delay);
+
+    zcl_metrics_record_discovery_retry();
+
+    /* 延迟后重新探测 */
+    esp_zb_scheduler_alarm(retry_probe_cb, 0, delay);
+}
+
+/**
+ * @brief 延迟执行的设备发现
+ *
+ * 在收到 Device Annce 后由 Kconfig 配置的延迟时间调用。
+ */
+static void discover_device_cb(uint8_t param)
+{
+    (void)param;
+
     if (s_pending_annce_short_addr == 0xFFFF) {
         return;
     }
     uint16_t short_addr = s_pending_annce_short_addr;
     s_pending_annce_short_addr = 0xFFFF;
 
-    /* 检查是否已存在桥接设备 */
+    /* 检查是否已存在桥接设备（重入网场景） */
     if (bridge_manager_is_device_bridged(short_addr)) {
-        ESP_LOGI(TAG, "Device 0x%04hx already bridged, re-reading basic attributes", short_addr);
+        ESP_LOGI(TAG, "Device 0x%04x already bridged, re-reading basic attributes", short_addr);
         uint8_t ep = bridge_manager_get_endpoint_by_short(short_addr);
         if (ep != 0xFF) {
             zdp_discovery_read_basic_attributes(short_addr, ep);
@@ -128,130 +255,85 @@ static void find_temp_humidity_sensor_cb(uint8_t param)
         return;
     }
 
-    ESP_LOGI(TAG, "Discovering temp/humidity sensor on 0x%04hx", short_addr);
-    esp_zb_zdo_match_desc_req_param_t cmd_req;
-    cmd_req.dst_nwk_addr = short_addr;
-    cmd_req.addr_of_interest = short_addr;
-    cmd_req.profile_id = ESP_ZB_AF_HA_PROFILE_ID;
-    uint16_t cluster_list[] = { ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT };
-    cmd_req.num_in_clusters = 1;
-    cmd_req.num_out_clusters = 0;
-    cmd_req.cluster_list = cluster_list;
-    esp_zb_zdo_match_cluster(&cmd_req, match_desc_resp_cb, NULL);
+    /* ── 首次发现 ── */
+    s_discovery_ctx.short_addr = short_addr;
+    s_discovery_ctx.retry_count = 0;
+    s_discovery_ctx.in_progress = true;
+
+    ESP_LOGI(TAG, "Starting endpoint probe for device 0x%04x (1..%d, max_retries=%d)",
+             short_addr, CONFIG_ZIGBEE_MAX_ENDPOINT_PROBE,
+             CONFIG_ZIGBEE_DISCOVERY_MAX_RETRIES);
+
+    probe_next_endpoint(short_addr, 1);
+
+    /* 调度超时检查（等待所有响应返回后再判断成败） */
+    esp_zb_scheduler_alarm(discover_done_cb, 0,
+                           CONFIG_ZIGBEE_DISCOVERY_RETRY_BASE_MS);
 }
 
 void zdp_discovery_handle_device_annce(uint16_t short_addr,
                                        const esp_zb_ieee_addr_t ieee_addr,
                                        bool steering_active)
 {
-    /* 不再需要检查 steering_active，bridge_manager 会处理去重 */
     (void)steering_active;
+    (void)ieee_addr;
 
-    /* 记录待处理设备，延迟 500ms 再发现 */
+    ESP_LOGD(TAG, "Device annce: 0x%04x, delaying %d ms before discovery",
+             short_addr, CONFIG_ZIGBEE_ANNCE_DELAY_MS);
+
+    /* 延迟配置的时间，等待设备入网稳定后再发 ZDO 请求 */
     s_pending_annce_short_addr = short_addr;
-    memcpy(s_pending_annce_ieee, ieee_addr, sizeof(esp_zb_ieee_addr_t));
-    esp_zb_scheduler_alarm((esp_zb_callback_t)find_temp_humidity_sensor_cb, 0, 500);
+    esp_zb_scheduler_alarm((esp_zb_callback_t)discover_device_cb, 0,
+                           CONFIG_ZIGBEE_ANNCE_DELAY_MS);
 }
 
-/* ==================== ZCL 属性处理 ==================== */
+/* ==================== ZCL 动作分发 ==================== */
 
-static void parse_and_log_attribute(uint8_t src_ep, uint8_t dst_ep,
-                                    uint16_t cluster,
-                                    const esp_zb_zcl_attribute_t *attribute)
+/**
+ * @brief 全局 ZCL 动作处理器
+ *
+ * 两步分发：
+ *   1. 优先通过 zcl_handler_registry 按 cluster 路由到设备处理器
+ *   2. 如果 registry 返回 NOT_FOUND，走内置 fallback（如读属性响应）
+ */
+static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
+                                   const void *message)
 {
-    ESP_LOGI(TAG, "ZCL report: src_ep=%d, dst_ep=%d, cluster=0x%04x, attr=0x%04x, size=%d",
-             src_ep, dst_ep, cluster, attribute->id, attribute->data.size);
-
-    switch (cluster) {
-    case ESP_ZB_ZCL_CLUSTER_ID_ON_OFF:
-        if (attribute->id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID && attribute->data.size == 1) {
-            uint8_t on_off = *(uint8_t *)attribute->data.value;
-            ESP_LOGI(TAG, "  -> On/Off state: %s", on_off ? "ON" : "OFF");
-        }
-        break;
-
-    case ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT:
-        if (attribute->id == ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID && attribute->data.size == 2) {
-            int16_t raw = *(int16_t *)attribute->data.value;
-            ESP_LOGI(TAG, "  -> Temperature: %.2f C (raw=%d)", raw / 100.0, raw);
-        }
-        break;
-
-    case 0x0405:
-        if (attribute->id == 0x0000 && attribute->data.size == 2) {
-            uint16_t raw = *(uint16_t *)attribute->data.value;
-            ESP_LOGI(TAG, "  -> Humidity: %.2f %% (raw=%u)", raw / 100.0, raw);
-        }
-        break;
-
-    default:
-        ESP_LOGI(TAG, "  -> Unhandled cluster 0x%04x", cluster);
-        break;
+    /* 第一步：尝试 registry 分发（report / set 走这里） */
+    esp_err_t err = zcl_handler_dispatch(callback_id, message);
+    if (err != ESP_ERR_NOT_FOUND) {
+        return err;
     }
-}
 
-static esp_err_t zb_set_attr_value_handler(const esp_zb_zcl_set_attr_value_message_t *message)
-{
-    if (!message) {
-        return ESP_FAIL;
+    /* 第二步：fallback — 读取属性响应（Basic 集群，所有设备通用） */
+    if (callback_id == ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID) {
+        return zb_read_attr_resp_handler(
+            (const esp_zb_zcl_cmd_read_attr_resp_message_t *)message);
     }
-    if (message->info.status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-        ESP_LOGW(TAG, "Received ZCL set attr with error status(%d)", message->info.status);
-        return ESP_ERR_INVALID_ARG;
-    }
-    parse_and_log_attribute(message->info.dst_endpoint, message->info.dst_endpoint,
-                            message->info.cluster, &message->attribute);
+
     return ESP_OK;
 }
 
-static esp_err_t zb_report_attr_handler(const esp_zb_zcl_report_attr_message_t *message)
+esp_zb_core_action_callback_t zdp_discovery_get_action_handler(void)
 {
-    if (!message) {
-        return ESP_FAIL;
-    }
-    if (message->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-        ESP_LOGW(TAG, "Received ZCL report with error status(%d)", message->status);
-        return ESP_ERR_INVALID_ARG;
-    }
-    parse_and_log_attribute(message->src_endpoint, message->dst_endpoint,
-                            message->cluster, &message->attribute);
-
-    if (message->cluster != ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT &&
-        message->cluster != 0x0405) {
-        return ESP_OK;
-    }
-
-    uint16_t short_addr = zboss_manager_find_short_addr_by_ep(message->src_endpoint);
-    if (short_addr == 0xFFFF) {
-        /* 从 ZCL 报告的 src_address 获取短地址 */
-        short_addr = message->src_address.u.short_addr;
-    }
-
-    if (short_addr == 0xFFFF) {
-        ESP_LOGW(TAG, "Cannot determine short_addr for ZCL report on endpoint %d",
-                 message->src_endpoint);
-        return ESP_OK;
-    }
-
-    ESP_LOGI(TAG, "ZCL report for bridging: src_ep=%d, short_addr=0x%04x, cluster=0x%04x",
-             message->src_endpoint, short_addr, message->cluster);
-
-    if (message->cluster == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT &&
-        message->attribute.id == ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID &&
-        message->attribute.data.size == 2) {
-        int16_t raw = *(int16_t *)message->attribute.data.value;
-        bridge_manager_report_sensor_data(short_addr, message->src_endpoint,
-                                          ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, raw);
-    } else if (message->cluster == 0x0405 &&
-               message->attribute.id == 0x0000 &&
-               message->attribute.data.size == 2) {
-        int16_t raw = *(int16_t *)message->attribute.data.value;
-        bridge_manager_report_sensor_data(short_addr, message->src_endpoint, 0x0405, raw);
-    }
-    return ESP_OK;
+    return zb_action_handler;
 }
 
-static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_message_t *message)
+/* ==================== 读取 Basic 属性响应（设备标识） ==================== */
+
+/**
+ * @brief 解析 Read Attributes 响应，提取设备标识并桥接到 Matter
+ *
+ * 从 Basic 集群响应中解析：
+ *   - Manufacturer Name (0x0001)
+ *   - Model Identifier (0x0005)
+ *   - SW Build ID (0x4000)
+ *   - deviceId (0x4001)
+ *
+ * 然后调用 bridge_manager_on_device_identified() 完成注册。
+ */
+static esp_err_t zb_read_attr_resp_handler(
+    const esp_zb_zcl_cmd_read_attr_resp_message_t *message)
 {
     if (!message) {
         return ESP_FAIL;
@@ -269,9 +351,11 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
     char model[MAX_NAME_LEN] = {0};
     char sw_version[16] = {0};
 
+    /* 遍历所有返回的属性 */
     esp_zb_zcl_read_attr_resp_variable_t *var = message->variables;
     while (var) {
         switch (var->attribute.id) {
+
         case ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID:
             if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && var->attribute.data.size > 0) {
                 uint8_t *data = (uint8_t *)var->attribute.data.value;
@@ -281,7 +365,7 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
                     memcpy(manufacturer, &data[1], copy_len);
                     manufacturer[copy_len] = '\0';
                 }
-                ESP_LOGI(TAG, "  -> Manufacturer Name: %.*s", len, &data[1]);
+                ESP_LOGI(TAG, "  Manufacturer: %.*s", len, &data[1]);
             }
             break;
 
@@ -294,7 +378,7 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
                     memcpy(model, &data[1], copy_len);
                     model[copy_len] = '\0';
                 }
-                ESP_LOGI(TAG, "  -> Model Identifier: %.*s", len, &data[1]);
+                ESP_LOGI(TAG, "  Model: %.*s", len, &data[1]);
             }
             break;
 
@@ -307,7 +391,7 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
                     memcpy(sw_version, &data[1], copy_len);
                     sw_version[copy_len] = '\0';
                 }
-                ESP_LOGI(TAG, "  -> SW Build ID: %.*s", len, &data[1]);
+                ESP_LOGI(TAG, "  SW Version: %.*s", len, &data[1]);
             }
             break;
 
@@ -315,7 +399,7 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
             if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && var->attribute.data.size >= 4) {
                 device_id = *(uint32_t *)var->attribute.data.value;
                 got_device_id = true;
-                ESP_LOGI(TAG, "  -> deviceId (0x4001): 0x%08X", (unsigned int)device_id);
+                ESP_LOGI(TAG, "  deviceId (0x4001): 0x%08lX", (unsigned long)device_id);
             }
             break;
 
@@ -325,49 +409,28 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
         var = var->next;
     }
 
-    /* 调用 Matter 层处理设备标识 */
+    /* 设备标识完成 → 桥接到 Matter */
     if (got_device_id && device_id != DEVICE_ID_UNKNOWN && device_id != 0) {
-        /* 根据 Model 字符串查 uiid（如 "TH-01" → 0x0001） */
         uint16_t detected_uiid = device_info_lookup_uiid(model);
         if (detected_uiid != UIID_UNKNOWN) {
             uiid = detected_uiid;
-            ESP_LOGI(TAG, "  -> uiid (from model): 0x%04X", uiid);
+            ESP_LOGI(TAG, "  uiid (from model): 0x%04X", uiid);
         }
         known_device_t *known = zboss_manager_find_by_short(short_addr);
         bridge_manager_on_device_identified(device_id, uiid, short_addr, src_endpoint,
                                             known ? known->ieee_addr : NULL);
+    } else {
+        ESP_LOGW(TAG, "No valid deviceId found in Read Attr response");
     }
 
     return ESP_OK;
-}
-
-/* ==================== ZCL 动作处理器 ==================== */
-
-static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
-                                   const void *message)
-{
-    switch (callback_id) {
-    case ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID:
-        return zb_set_attr_value_handler((const esp_zb_zcl_set_attr_value_message_t *)message);
-    case ESP_ZB_CORE_REPORT_ATTR_CB_ID:
-        return zb_report_attr_handler((const esp_zb_zcl_report_attr_message_t *)message);
-    case ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID:
-        return zb_read_attr_resp_handler((const esp_zb_zcl_cmd_read_attr_resp_message_t *)message);
-    default:
-        return ESP_OK;
-    }
-}
-
-esp_zb_core_action_callback_t zdp_discovery_get_action_handler(void)
-{
-    return zb_action_handler;
 }
 
 /* ==================== 读取 Basic 属性 ==================== */
 
 void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint)
 {
-    ESP_LOGI(TAG, "Reading Basic attributes from device 0x%04hx, endpoint=%d", short_addr, endpoint);
+    ESP_LOGI(TAG, "Reading Basic attributes from device 0x%04x, endpoint=%d", short_addr, endpoint);
 
     static const uint16_t attr_list[] = {
         ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID,
@@ -390,7 +453,16 @@ void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint)
     ESP_LOGI(TAG, "Read Attributes command sent, seq=%u", seq);
 }
 
+/* ==================== 初始化 ==================== */
+
 void zdp_discovery_init(void)
 {
-    /* 预留：后续可注册额外的 ZDO 回调等 */
+    ESP_LOGI(TAG, "zdp_discovery init: probe=%d, annce_delay=%dms, retries=%d (base=%dms)",
+             CONFIG_ZIGBEE_MAX_ENDPOINT_PROBE,
+             CONFIG_ZIGBEE_ANNCE_DELAY_MS,
+             CONFIG_ZIGBEE_DISCOVERY_MAX_RETRIES,
+             CONFIG_ZIGBEE_DISCOVERY_RETRY_BASE_MS);
+
+    /* 初始化 ZCL 设备处理器注册表 */
+    zcl_handlers_init();
 }

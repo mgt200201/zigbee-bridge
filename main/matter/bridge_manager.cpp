@@ -20,10 +20,13 @@
  * 本层只懂 Matter 协议，所有 Zigbee 细节通过 zdp_discovery 接口访问。
  */
 
-#include "bridge_manager.h"
+#include <bridge_manager.h>
 #include "device_info.h"
+#include "zigbee_matter_map.h"
+#include <commissioning_mgr.h>
 #include <zboss_manager.h>
 #include <zdp_discovery.h>
+#include <zcl_bridge_api.h>
 #include <wifi_manager.h>
 #include <esp_check.h>
 #include <esp_err.h>
@@ -47,9 +50,60 @@ using namespace esp_matter::cluster;
 /** Aggregator 端点 ID */
 static uint16_t s_aggregator_ep_id = chip::kInvalidEndpointId;
 
+/* ==================== Bridge API 适配层（依赖注入） ==================== */
+
+/**
+ * 将 bridge_manager 的全局函数包装为 zcl_bridge_api 接口，
+ * 使 ZCL handler 层不直接依赖 bridge_manager，而是通过接口注入。
+ */
+
+static void bridge_api_report_sensor(uint16_t short_addr, uint8_t endpoint,
+                                     uint16_t cluster_id, int16_t raw_value)
+{
+    bridge_manager_report_sensor_data(short_addr, endpoint, cluster_id, raw_value);
+}
+
+static void bridge_api_report_on_off(uint16_t short_addr, uint8_t endpoint, bool on)
+{
+    app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+    if (!dev || !dev->dev || !dev->dev->endpoint) {
+        ESP_LOGW(TAG, "Cannot report On/Off: no bridge for 0x%04x", short_addr);
+        return;
+    }
+    uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
+    esp_matter_attr_val_t val = esp_matter_bool(on);
+    esp_err_t err = attribute::update(matter_ep, OnOff::Id,
+                                      OnOff::Attributes::OnOff::Id, &val);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "On/Off attribute::update failed: %s", esp_err_to_name(err));
+    }
+}
+
+static bool bridge_api_is_bridged(uint16_t short_addr)
+{
+    return bridge_manager_is_device_bridged(short_addr);
+}
+
+static uint8_t bridge_api_get_ep(uint16_t short_addr)
+{
+    return bridge_manager_get_endpoint_by_short(short_addr);
+}
+
+/** Bridge API 实例（静态全局，在 init 中注册到 ZCL 层） */
+static const zcl_bridge_api_t s_bridge_api_impl = {
+    .report_sensor = bridge_api_report_sensor,
+    .report_on_off = bridge_api_report_on_off,
+    .is_device_bridged = bridge_api_is_bridged,
+    .get_endpoint_by_short = bridge_api_get_ep,
+};
+
 void bridge_manager_init(uint16_t aggregator_endpoint_id)
 {
     s_aggregator_ep_id = aggregator_endpoint_id;
+
+    /* 注册桥接接口到 ZCL 层（依赖注入） */
+    zcl_bridge_api_register(&s_bridge_api_impl);
+
     ESP_LOGI(TAG, "Bridge manager initialized, aggregator endpoint=%d", aggregator_endpoint_id);
 }
 
@@ -85,8 +139,8 @@ void bridge_manager_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         ESP_LOGI(TAG, "Commissioning window opened");
         {
             chip::PayloadContents payloadContents;
-            payloadContents.setUpPINCode = 20202021;
-            payloadContents.discriminator.SetLongValue(3840);
+            payloadContents.setUpPINCode = commissioning_mgr_get_pin();
+            payloadContents.discriminator.SetLongValue(commissioning_mgr_get_discriminator());
             payloadContents.rendezvousInformation.SetValue(chip::RendezvousInformationFlag::kBLE);
             payloadContents.commissioningFlow = chip::CommissioningFlow::kStandard;
             std::string manualPairingCode;
@@ -278,32 +332,26 @@ void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,
         return;
     }
 
-    uint16_t matter_ep = esp_matter::endpoint::get_id(zigbee_device->dev->endpoint);
-    uint32_t cluster_id_matter = 0;
-    uint32_t attr_id = 0;
-
-    if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT) {
-        cluster_id_matter = TemperatureMeasurement::Id;
-        attr_id = TemperatureMeasurement::Attributes::MeasuredValue::Id;
-    } else if (cluster_id == 0x0405) {
-        cluster_id_matter = RelativeHumidityMeasurement::Id;
-        attr_id = RelativeHumidityMeasurement::Attributes::MeasuredValue::Id;
-    } else {
+    const zigbee_matter_map_entry_t *entry = zigbee_matter_map_find(cluster_id);
+    if (!entry) {
+        ESP_LOGD(TAG, "No Matter mapping for zigbee cluster 0x%04x (short=0x%04x)", cluster_id, short_addr);
         return;
     }
 
+    uint16_t matter_ep = esp_matter::endpoint::get_id(zigbee_device->dev->endpoint);
+
     esp_matter_attr_val_t val = esp_matter_invalid(NULL);
-    if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT) {
-        val.type = ESP_MATTER_VAL_TYPE_NULLABLE_INT16;
+    val.type = entry->val_type;
+    if (entry->val_type == ESP_MATTER_VAL_TYPE_NULLABLE_INT16) {
         val.val.i16 = raw_value;
-    } else {
-        val.type = ESP_MATTER_VAL_TYPE_NULLABLE_UINT16;
+    } else if (entry->val_type == ESP_MATTER_VAL_TYPE_NULLABLE_UINT16) {
         val.val.u16 = (uint16_t)raw_value;
     }
 
-    esp_err_t err = attribute::update(matter_ep, cluster_id_matter, attr_id, &val);
+    esp_err_t err = attribute::update(matter_ep, entry->matter_cluster, entry->matter_attr, &val);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "attribute::update failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "attribute::update failed (cluster=0x%04x, ep=%d): %s",
+                 cluster_id, matter_ep, esp_err_to_name(err));
     }
 }
 

@@ -36,8 +36,13 @@
 #include <bridge_manager.h>
 #include <device_info.h>
 #include <wifi_manager.h>
+#include <ota_manager.h>
+#include <commissioning_mgr.h>
 #include <button.h>
 #include <led.h>
+#include "build_info.h"
+#include "self_test.h"
+#include "watchdog.h"
 
 static const char *TAG = "app_main";
 
@@ -48,9 +53,25 @@ using namespace esp_matter::endpoint;
 
 extern "C" void app_main(void)
 {
+    /* ---- 第 0 层：构建元信息 + 启动自检 ---- */
+    ESP_LOGI(TAG, "Firmware: %s", build_info_get_string());
+    ESP_LOGI(TAG, "ESP-IDF: %d.%d", ESP_IDF_VERSION_MAJOR, ESP_IDF_VERSION_MINOR);
+
+    esp_err_t self_test_ret = self_test_run();
+    if (self_test_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Self-test returned %s, continuing in degraded mode",
+                 esp_err_to_name(self_test_ret));
+    }
+
+    /* ---- 看门狗初始化（监视所有长运行任务） ---- */
+    ESP_ERROR_CHECK(watchdog_init());
+
     /* ---- 第 1 层：基础硬件初始化 ---- */
     nvs_flash_init();
     ESP_LOGI(TAG, "NVS initialized");
+
+    commissioning_mgr_init();
+    ESP_LOGI(TAG, "Commissioning credentials initialized");
 
     button_init(GPIO_NUM_9);
     led_init(GPIO_NUM_10, false); /* active_low=false: 高电平点亮 */
@@ -88,6 +109,10 @@ extern "C" void app_main(void)
     /* WiFi 管理层初始化（处理断线重连） */
     wifi_manager_init();
 
+    /* OTA 固件升级初始化 */
+    ota_manager_init();
+    ota_manager_start_periodic_check();
+
     /* ---- 第 3 层：Zigbee 协议栈启动 ---- */
     zdp_discovery_init();
 
@@ -118,4 +143,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Button callback registered");
 
     ESP_LOGI(TAG, "=== System initialized ===");
+
+    /* 主任务即将退出，从看门狗中移除 */
+    watchdog_remove_self();
 }
