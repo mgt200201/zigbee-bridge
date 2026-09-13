@@ -29,6 +29,7 @@
 #include <zboss_manager.h>
 #include <bridge_manager.h>
 #include <device_info.h>
+#include <app_bridged_device.h>
 #include <string.h>
 #include <esp_log.h>
 #include <zdo/esp_zigbee_zdo_command.h>
@@ -264,6 +265,8 @@ static void discover_device_cb(uint8_t param)
              short_addr, CONFIG_ZIGBEE_MAX_ENDPOINT_PROBE,
              CONFIG_ZIGBEE_DISCOVERY_MAX_RETRIES);
 
+    zdp_discovery_send_register_status(short_addr, 1, 128);
+
     probe_next_endpoint(short_addr, 1);
 
     /* 调度超时检查（等待所有响应返回后再判断成败） */
@@ -424,6 +427,61 @@ static esp_err_t zb_read_attr_resp_handler(
     }
 
     return ESP_OK;
+}
+
+/* ==================== 私有集群注册状态下发 ==================== */
+
+void zdp_discovery_send_register_status(uint16_t short_addr, uint8_t endpoint, uint16_t status)
+{
+    ESP_LOGI(TAG, "Send register_status=%u to 0x%04x ep=%d (cluster=0xFC11, attr=0x1FFF)",
+             status, short_addr, endpoint);
+
+    static uint16_t s_status_value;
+    s_status_value = status;
+
+    esp_zb_zcl_attribute_t attr = {
+        .id   = 0x1FFF,
+        .data = {
+            .type  = ESP_ZB_ZCL_ATTR_TYPE_U16,
+            .size  = sizeof(uint16_t),
+            .value = &s_status_value,
+        },
+    };
+
+    esp_zb_zcl_write_attr_cmd_t cmd_req = {
+        .zcl_basic_cmd = {
+            .dst_addr_u   = { .addr_short = short_addr },
+            .dst_endpoint = endpoint,
+            .src_endpoint = HA_GW_ENDPOINT,
+        },
+        .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+        .clusterID    = 0xFC11,
+        .attr_number  = 1,
+        .attr_field   = &attr,
+    };
+    cmd_req.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+
+    esp_zb_zcl_write_attr_cmd_req(&cmd_req);
+}
+
+/* ==================== 设备离网清理 ==================== */
+
+void zdp_discovery_handle_device_leave(uint16_t short_addr)
+{
+    ESP_LOGI(TAG, "Handling device leave: 0x%04x", short_addr);
+
+    /* 移除 Matter 桥接设备 */
+    app_bridged_device_t *bridged = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+    if (bridged) {
+        ESP_LOGI(TAG, "Removing Matter bridge for device 0x%04x", short_addr);
+        app_bridge_remove_device(bridged);
+    }
+
+    /* 从 device_info 中删除（包括 NVS 持久化数据） */
+    device_info_t *info = device_info_find_by_short_addr(short_addr);
+    if (info && info->device_id != DEVICE_ID_UNKNOWN) {
+        device_info_remove_by_device_id(info->device_id);
+    }
 }
 
 /* ==================== 读取 Basic 属性 ==================== */

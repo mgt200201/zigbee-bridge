@@ -55,6 +55,29 @@ esp_zb_core_action_callback_t zdp_discovery_get_action_handler(void);
  */
 void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint);
 
+/**
+ * @brief 通过私有集群 0xFC11 属性 0x1FFF 下发设备注册状态
+ *
+ * 用于协调器与子设备之间的注册流程握手机制：
+ *   - 128: 协调器发现开始，设备等待
+ *   - 129: Matter 注册完成，设备可继续操作
+ *
+ * @param short_addr 目标设备短地址
+ * @param endpoint   目标设备端点号
+ * @param status     状态值（128/129）
+ */
+void zdp_discovery_send_register_status(uint16_t short_addr, uint8_t endpoint, uint16_t status);
+
+/**
+ * @brief 处理设备离网事件
+ *
+ * 当收到 ESP_ZB_ZDO_SIGNAL_LEAVE_INDICATION 且 rejoin==0 时调用。
+ * 负责清理 Matter 桥接设备、device_info 记录和 NVS 持久化数据。
+ *
+ * @param short_addr 离网设备短地址
+ */
+void zdp_discovery_handle_device_leave(uint16_t short_addr);
+
 #ifdef __cplusplus
 }
 #endif

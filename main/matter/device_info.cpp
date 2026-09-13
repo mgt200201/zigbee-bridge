@@ -245,6 +245,38 @@ void device_info_set_offline(uint16_t short_addr)
     }
 }
 
+void device_info_remove_by_device_id(uint32_t device_id)
+{
+    if (device_id == DEVICE_ID_UNKNOWN || device_id == 0) {
+        return;
+    }
+
+    device_info_t *dev = device_info_find_by_device_id(device_id);
+    if (!dev) {
+        return;
+    }
+
+    /* 从 NVS 中擦除持久化数据 */
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        char key[16];
+        make_nvs_key(device_id, key);
+        err = nvs_erase_key(handle, key);
+        if (err == ESP_OK) {
+            nvs_commit(handle);
+            ESP_LOGI(TAG, "Erased NVS key '%s' for device_id=0x%08X", key, (unsigned int)device_id);
+        } else {
+            ESP_LOGW(TAG, "Failed to erase NVS key '%s': %s", key, esp_err_to_name(err));
+        }
+        nvs_close(handle);
+    }
+
+    /* 从内存中清除 */
+    memset(dev, 0, sizeof(device_info_t));
+    ESP_LOGI(TAG, "Removed device_id=0x%08X from memory", (unsigned int)device_id);
+}
+
 void device_info_set_matter_endpoint(uint32_t device_id, uint16_t matter_endpoint_id)
 {
     device_info_t *dev = device_info_find_by_device_id(device_id);

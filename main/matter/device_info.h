@@ -136,6 +136,12 @@ void device_info_update_online(uint32_t device_id, uint16_t short_addr,
 void device_info_set_offline(uint16_t short_addr);
 
 /**
+ * @brief 彻底删除设备信息（包括 NVS 持久化数据）
+ * @param device_id 设备ID
+ */
+void device_info_remove_by_device_id(uint32_t device_id);
+
+/**
  * @brief 更新设备信息中的 Matter 桥接端点 ID
  * @param device_id 设备ID
  * @param matter_endpoint_id Matter 端点 ID

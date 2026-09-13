@@ -321,6 +321,8 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
             }
         }
     }
+
+    zdp_discovery_send_register_status(short_addr, endpoint, 129);
 }
 
 void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,
