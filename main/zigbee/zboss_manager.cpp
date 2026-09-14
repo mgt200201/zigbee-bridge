@@ -132,6 +132,14 @@ static void zboss_task(void *pvParameters)
 
     esp_zb_cfg_t zb_nwk_cfg = ESP_ZB_ZC_CONFIG();
     zb_nwk_cfg.nwk_cfg.zczr_cfg.max_children = 16;
+
+    /* 缩减 ZBOSS 缓冲区，释放堆内存给 Matter 栈
+     * 原默认值: io=80, queue=80, network=64 — 150KB DRAM 无法容纳
+     * network_size=32 保证 coordinator address table 足以处理 rejoin */
+    esp_zb_io_buffer_size_set(48);
+    esp_zb_scheduler_queue_size_set(48);
+    esp_zb_overall_network_size_set(32);
+
     esp_zb_init(&zb_nwk_cfg);
 
     /* 注：esp_zb_nwk_set_ed_timeout / esp_zb_nwk_set_leave_req_allowed

@@ -4,7 +4,22 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_TASK_STACK_SIZE=5120
-CONFIG_BT_NIMBLE_ACL_BUF_SIZE=255
+
+# Increase main task stack for Matter commissioning (PBKDF2 verifier)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Reduce WiFi buffers to free DRAM for Zigbee RCP UART driver
+# Default: DYNAMIC_RX=32, DYNAMIC_TX=32, STATIC_RX=10
+# Each buffer = ~1.6KB, saving ~86KB total
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+
+# Reduce NimBLE ACL buffer to save DRAM
+CONFIG_BT_NIMBLE_ACL_BUF_SIZE=128
+
+# Limit BLE connections to 1 (only need one commissioner)
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 
 # Enable FreeRTOS legacy API
 CONFIG_FREERTOS_ENABLE_BACKWARD_COMPATIBILITY=y
@@ -47,6 +62,18 @@ CONFIG_SUPPORT_GROUPCAST_CLUSTER=n
 
 # Increase max dynamic endpoints for bridged Zigbee devices
 CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=32
+
+# Use IDF mDNS instead of CHIP's minimal mDNS
+# Minimal mDNS cannot fragment UDP broadcast packets,
+# causing "mDNS broadcast full failed" when multiple
+# IPv6 addresses are present, preventing HA discovery
+CONFIG_USE_MINIMAL_MDNS=n
+
+# Optimize IDF mDNS for Matter
+# Disable mDNS on unused ETH interface (only STA is needed)
+CONFIG_MDNS_PREDEF_NETIF_ETH=n
+# Disable mDNS on AP interface (unless you use SoftAP for commissioning)
+CONFIG_MDNS_PREDEF_NETIF_AP=n
 
 # Default WiFi credentials for Home Assistant network
 CONFIG_DEFAULT_WIFI_SSID="Flymodem2855"
