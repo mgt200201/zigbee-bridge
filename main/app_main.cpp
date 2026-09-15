@@ -25,6 +25,9 @@
 #include <nvs_flash.h>
 #include <esp_system.h>
 #include <esp_random.h>
+#include <string.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
@@ -175,7 +178,9 @@ extern "C" void app_main(void)
     err = app_bridge_initialize(node, bridge_manager_create_devices_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume bridged endpoints: %d", err));
 
-#if CONFIG_ENABLE_CHIP_SHELL
+/* CHIP shell console 与 serial_cmd 任务共享 UART0 会导致 spinlock 冲突，已禁用。
+     * 改用下面 app_main 中独立的 serial_cmd 任务处理串口命令。 */
+#if 0
     esp_matter::console::diagnostics_register_commands();
     esp_matter::console::wifi_register_commands();
     esp_matter::console::factoryreset_register_commands();
@@ -206,6 +211,28 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Steering LED callback registered");
 
     zboss_manager_start();
+
+    /* ---- 串口命令监听任务（factoryreset 等） ---- */
+    xTaskCreate([](void *) {
+        char line[128];
+        while (true) {
+            if (fgets(line, sizeof(line), stdin)) {
+                char *end = line + strlen(line);
+                while (end > line && (*(end - 1) == '\n' || *(end - 1) == '\r')) {
+                    *(--end) = '\0';
+                }
+                if (strcmp(line, "factoryreset") == 0) {
+                    ESP_LOGI(TAG, "Factory reset triggered via serial...");
+                    esp_matter::factory_reset();
+                } else if (strcmp(line, "help") == 0) {
+                    ESP_LOGI(TAG, "Commands: factoryreset, help");
+                } else if (strlen(line) > 0) {
+                    ESP_LOGI(TAG, "Unknown command: '%s' (try 'help')", line);
+                }
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }, "serial_cmd", 4096, NULL, 2, NULL);
 
     /* ---- 第 4 层：按键事件路由 ---- */
     button_register_callback([](button_event_t event, void *user_data) {

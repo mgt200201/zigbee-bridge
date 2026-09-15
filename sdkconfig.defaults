@@ -78,3 +78,9 @@ CONFIG_MDNS_PREDEF_NETIF_AP=n
 # Default WiFi credentials for Home Assistant network
 CONFIG_DEFAULT_WIFI_SSID="Flymodem2855"
 CONFIG_DEFAULT_WIFI_PASSWORD="m19327743237"
+
+# Disable OpenThread - we use WiFi+Zigbee, not Thread
+# OpenThread Spinel driver conflicts with Zigbee RCP UART and causes
+# "Failed to reset co-processor!" abort on WiFi connection
+CONFIG_ESP_MATTER_ENABLE_OPENTHREAD=n
+CONFIG_OPENTHREAD_SPINEL_ONLY=n
