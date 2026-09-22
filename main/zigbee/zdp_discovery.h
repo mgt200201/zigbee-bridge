@@ -56,6 +56,19 @@ esp_zb_core_action_callback_t zdp_discovery_get_action_handler(void);
 void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint);
 
 /**
+ * @brief 温湿度传感器入网后主动配置属性上报
+ *
+ * 当设备 uiid 识别为 UIID_TEMP_HUMIDITY_SENSOR (0x0001) 时调用，
+ * 按主流温湿度计参数向子设备下发 Configure Reporting：
+ *   - 温度 MeasuredValue (0x0402/0x0000)
+ *   - 湿度 MeasuredValue (0x0405/0x0000)
+ *
+ * @param short_addr 目标设备短地址
+ * @param endpoint   目标设备端点号
+ */
+void zdp_discovery_configure_reporting(uint16_t short_addr, uint8_t endpoint);
+
+/**
  * @brief 通过私有集群 0xFC11 属性 0x1FFF 下发设备注册状态
  *
  * 用于协调器与子设备之间的注册流程握手机制：

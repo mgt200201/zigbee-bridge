@@ -33,6 +33,8 @@
 #include <string.h>
 #include <esp_log.h>
 #include <zdo/esp_zigbee_zdo_command.h>
+#include <zcl/esp_zigbee_zcl_temperature_meas.h>
+#include <zcl/esp_zigbee_zcl_humidity_meas.h>
 
 static const char *TAG = "zdp_discovery";
 
@@ -81,6 +83,9 @@ static discovery_ctx_t s_discovery_ctx = {
 
 /** 待处理的设备公告数据 */
 static uint16_t s_pending_annce_short_addr = 0xFFFF;
+
+/** 当前发现流程是否属于「首次配网入网」（仅首配时下发上报配置，rejoin 跳过） */
+static bool s_first_join_pending = false;
 
 /* ==================== 内部函数声明 ==================== */
 static void discover_device_cb(uint8_t param);
@@ -249,6 +254,7 @@ static void discover_device_cb(uint8_t param)
     /* 检查是否已存在桥接设备（重入网场景） */
     if (bridge_manager_is_device_bridged(short_addr)) {
         ESP_LOGI(TAG, "Device 0x%04x already bridged, re-reading basic attributes", short_addr);
+        s_first_join_pending = false;   /* rejoin：不重复下发上报配置 */
         uint8_t ep = bridge_manager_get_endpoint_by_short(short_addr);
         if (ep != 0xFF) {
             zdp_discovery_read_basic_attributes(short_addr, ep);
@@ -257,6 +263,7 @@ static void discover_device_cb(uint8_t param)
     }
 
     /* ── 首次发现 ── */
+    s_first_join_pending = true;        /* 首次配网：识别后需要下发上报配置 */
     s_discovery_ctx.short_addr = short_addr;
     s_discovery_ctx.retry_count = 0;
     s_discovery_ctx.in_progress = true;
@@ -412,18 +419,26 @@ static esp_err_t zb_read_attr_resp_handler(
         var = var->next;
     }
 
+    /* 根据型号推断 uiid（供设备识别 + 上报配置决策共同使用） */
+    uint16_t detected_uiid = device_info_lookup_uiid(model);
+    if (detected_uiid != UIID_UNKNOWN) {
+        uiid = detected_uiid;
+        ESP_LOGI(TAG, "  uiid (from model): 0x%04X", uiid);
+    }
+
     /* 设备标识完成 → 桥接到 Matter */
     if (got_device_id && device_id != DEVICE_ID_UNKNOWN && device_id != 0) {
-        uint16_t detected_uiid = device_info_lookup_uiid(model);
-        if (detected_uiid != UIID_UNKNOWN) {
-            uiid = detected_uiid;
-            ESP_LOGI(TAG, "  uiid (from model): 0x%04X", uiid);
-        }
         known_device_t *known = zboss_manager_find_by_short(short_addr);
         bridge_manager_on_device_identified(device_id, uiid, short_addr, src_endpoint,
                                             known ? known->ieee_addr : NULL);
     } else {
         ESP_LOGW(TAG, "No valid deviceId found in Read Attr response");
+    }
+
+    /* 温湿度传感器仅在首次配网入网时主动配置属性上报；rejoin 不重复下发 */
+    if (s_first_join_pending && uiid == UIID_TEMP_HUMIDITY_SENSOR) {
+        zdp_discovery_configure_reporting(short_addr, src_endpoint);
+        s_first_join_pending = false;
     }
 
     return ESP_OK;
@@ -462,6 +477,65 @@ void zdp_discovery_send_register_status(uint16_t short_addr, uint8_t endpoint, u
     cmd_req.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
 
     esp_zb_zcl_write_attr_cmd_req(&cmd_req);
+}
+
+/* ==================== 温湿度传感器上报配置 ==================== */
+
+/** 温湿度传感器 (uiid 0x0001) 默认上报参数 —— 对齐市面主流温湿度计 */
+#define TH_REPORT_MIN_INTERVAL      5      /**< 最小上报间隔（秒） */
+#define TH_REPORT_MAX_INTERVAL      1800   /**< 最大上报间隔（秒） */
+#define TH_REPORT_TEMP_CHANGE       50     /**< 温度变化阈值 0.5°C（单位 0.01°C） */
+#define TH_REPORT_HUMIDITY_CHANGE   100    /**< 湿度变化阈值 1%（单位 0.01%） */
+
+static void send_config_report(uint16_t short_addr, uint8_t endpoint,
+                               uint16_t cluster_id, uint16_t attr_id,
+                               uint8_t attr_type, void *reportable_change)
+{
+    esp_zb_zcl_config_report_record_t record;
+    memset(&record, 0, sizeof(record));
+    record.direction = ESP_ZB_ZCL_REPORT_DIRECTION_SEND;
+    record.attributeID = attr_id;
+    record.attrType = attr_type;
+    record.min_interval = TH_REPORT_MIN_INTERVAL;
+    record.max_interval = TH_REPORT_MAX_INTERVAL;
+    record.reportable_change = reportable_change;
+
+    esp_zb_zcl_config_report_cmd_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.zcl_basic_cmd.dst_addr_u.addr_short = short_addr;
+    cmd.zcl_basic_cmd.dst_endpoint = endpoint;
+    cmd.zcl_basic_cmd.src_endpoint = HA_GW_ENDPOINT;
+    cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+    cmd.clusterID = cluster_id;
+    cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+    cmd.record_number = 1;
+    cmd.record_field = &record;
+
+    uint8_t seq = esp_zb_zcl_config_report_cmd_req(&cmd);
+    ESP_LOGI(TAG, "Configure report 0x%04x ep=%d cluster=0x%04x attr=0x%04x "
+             "(min=%ds max=%ds), seq=%u",
+             short_addr, endpoint, cluster_id, attr_id,
+             TH_REPORT_MIN_INTERVAL, TH_REPORT_MAX_INTERVAL, seq);
+}
+
+void zdp_discovery_configure_reporting(uint16_t short_addr, uint8_t endpoint)
+{
+    ESP_LOGI(TAG, "Configuring reporting for TH sensor 0x%04x ep=%d", short_addr, endpoint);
+
+    static int16_t s_temp_change = TH_REPORT_TEMP_CHANGE;
+    static uint16_t s_humidity_change = TH_REPORT_HUMIDITY_CHANGE;
+
+    /* 温度 MeasuredValue (0x0402/0x0000, int16, 0.01°C) */
+    send_config_report(short_addr, endpoint,
+                       ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
+                       ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
+                       ESP_ZB_ZCL_ATTR_TYPE_S16, &s_temp_change);
+
+    /* 湿度 MeasuredValue (0x0405/0x0000, uint16, 0.01%) */
+    send_config_report(short_addr, endpoint,
+                       ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
+                       ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
+                       ESP_ZB_ZCL_ATTR_TYPE_U16, &s_humidity_change);
 }
 
 /* ==================== 设备离网清理 ==================== */

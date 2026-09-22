@@ -42,6 +42,12 @@ extern "C" {
 #define UIID_UNKNOWN           0xFFFF
 
 /**
+ * @def UIID_TEMP_HUMIDITY_SENSOR
+ * @brief 温湿度传感器 uiid（TH-01 型号映射，见 device_info_lookup_uiid）
+ */
+#define UIID_TEMP_HUMIDITY_SENSOR   0x0001
+
+/**
  * @def MAX_NAME_LEN
  * @brief 制造商/型号字符串最大长度
  */
