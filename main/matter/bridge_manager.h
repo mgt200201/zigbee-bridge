@@ -64,6 +64,15 @@ esp_err_t bridge_manager_create_devices_cb(esp_matter::endpoint_t *ep,
 
 /* ==================== 桥接设备管理 ==================== */
 
+/**
+ * @brief 设置 Zigbee 栈是否已就绪。
+ *
+ * 由 zboss_manager 在 esp_zb_init() 完成后调用。栈未就绪前禁止任何下行 Zigbee 命令，
+ * 否则开机 resume 端点时属性 init 回调会触发 esp_zb_zcl_*_cmd_req()，
+ * 而 ZBOSS 的 bufpool 尚未分配，直接访问空指针崩溃。
+ */
+void bridge_manager_set_zb_stack_ready(bool ready);
+
 bool bridge_manager_is_device_bridged(uint16_t short_addr);
 uint8_t bridge_manager_get_endpoint_by_short(uint16_t short_addr);
 

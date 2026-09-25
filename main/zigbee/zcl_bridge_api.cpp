@@ -30,9 +30,12 @@ void zcl_bridge_api_register(const zcl_bridge_api_t *api)
         return;
     }
     s_bridge_api = api;
-    ESP_LOGI(TAG, "Bridge API registered (%s%s%s)",
+    ESP_LOGI(TAG, "Bridge API registered (%s%s%s%s%s%s)",
              api->report_sensor ? "report_sensor " : "",
              api->report_on_off ? "report_on_off " : "",
+             api->report_level ? "report_level " : "",
+             api->report_color_xy ? "report_color_xy " : "",
+             api->report_color_hsv ? "report_color_hsv " : "",
              api->is_device_bridged ? "is_device_bridged " : "");
 }
 

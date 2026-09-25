@@ -37,6 +37,12 @@
 #include <crypto/CHIPCryptoPAL.h>
 #include <lib/support/Base64.h>
 
+/* 自定义 Device Instance Info Provider，用于把 Basic Information 集群的制造商改为 "XiaoNian" */
+#include <esp_matter_providers.h>
+#include <platform/internal/GenericConfigurationManagerImpl.h>
+#include <platform/internal/GenericDeviceInstanceInfoProvider.h>
+#include <platform/internal/GenericDeviceInstanceInfoProvider.ipp>
+
 #include <common_macros.h>
 #include <app_bridged_device.h>
 
@@ -57,6 +63,43 @@ static const char *TAG = "app_main";
 
 using namespace esp_matter;
 using namespace esp_matter::endpoint;
+
+/* ---------------- 自定义 Device Instance Info Provider ----------------
+ * Matter Basic Information 集群的 VendorName(制造商) 读取走
+ * DeviceInstanceInfoProvider::GetVendorName()。这里覆盖它，让所有通过本网关
+ * 暴露到 HA 的设备制造商都显示为 "XiaoNian"。其余设备信息沿用默认实现。
+ */
+namespace {
+
+using XiaoNianDeviceInfoBase =
+    chip::DeviceLayer::Internal::GenericDeviceInstanceInfoProvider<chip::DeviceLayer::Internal::ESP32Config>;
+
+using XiaoNianConfigMgrBase =
+    chip::DeviceLayer::Internal::GenericConfigurationManagerImpl<chip::DeviceLayer::Internal::ESP32Config>;
+
+class XiaoNianDeviceInstanceInfoProvider : public XiaoNianDeviceInfoBase
+{
+public:
+    XiaoNianDeviceInstanceInfoProvider()
+        : XiaoNianDeviceInfoBase(static_cast<XiaoNianConfigMgrBase &>(chip::DeviceLayer::ConfigurationMgr())) {}
+
+    CHIP_ERROR GetVendorName(char *buf, size_t bufSize) override
+    {
+        constexpr char kXiaoNian[] = "XiaoNian";
+        VerifyOrReturnError(bufSize >= sizeof(kXiaoNian), CHIP_ERROR_BUFFER_TOO_SMALL);
+        memcpy(buf, kXiaoNian, sizeof(kXiaoNian));
+        return CHIP_NO_ERROR;
+    }
+};
+
+void register_xiaonian_manufacturer(void)
+{
+    static XiaoNianDeviceInstanceInfoProvider s_provider;
+    esp_matter::set_custom_device_instance_info_provider(&s_provider);
+    ESP_LOGI(TAG, "Manufacturer set to XiaoNian");
+}
+
+} /* namespace */
 
 /* ==================== 主函数 ==================== */
 
@@ -160,6 +203,9 @@ extern "C" void app_main(void)
 
     /* ---- 第 2 层：Matter 协议栈初始化 ---- */
     device_info_init();
+
+    /* 在 esp_matter::start() 前注册自定义 Device Instance Info Provider，把制造商改为 XiaoNian */
+    register_xiaonian_manufacturer();
 
     node::config_t node_config;
     node_t *node = node::create(&node_config, bridge_manager_attr_update_cb, NULL);

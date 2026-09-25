@@ -48,6 +48,12 @@ extern "C" {
 #define UIID_TEMP_HUMIDITY_SENSOR   0x0001
 
 /**
+ * @def UIID_RGB_LED
+ * @brief RGB 灯 uiid（RGBLED-01 型号映射，见 device_info_lookup_uiid）
+ */
+#define UIID_RGB_LED                0x0002
+
+/**
  * @def MAX_NAME_LEN
  * @brief 制造商/型号字符串最大长度
  */

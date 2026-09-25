@@ -50,6 +50,41 @@ using namespace esp_matter::cluster;
 /** Aggregator 端点 ID */
 static uint16_t s_aggregator_ep_id = chip::kInvalidEndpointId;
 
+/* ---- 下行颜色配对影子状态（按 Matter 端点索引） ----
+ * Matter 控制器一次只写一个颜色属性（如 CurrentX），而 Zigbee 命令需要成对值
+ * (X+Y 或 H+S)。此影子表缓存配对值，凑齐后再发命令。 */
+#define COLOR_EP_SHADOW_SLOTS 8
+typedef struct {
+    uint16_t matter_ep;
+    bool valid;
+    bool have_x, have_y;       /**< CurrentX / CurrentY 是否收到过 */
+    bool have_hue, have_sat;   /**< CurrentHue / CurrentSaturation 是否收到过 */
+    uint16_t x, y;
+    uint8_t hue, sat;
+} color_ep_shadow_t;
+static color_ep_shadow_t s_color_ep_shadow[COLOR_EP_SHADOW_SLOTS];
+
+static color_ep_shadow_t *color_ep_shadow_find(uint16_t matter_ep)
+{
+    for (int i = 0; i < COLOR_EP_SHADOW_SLOTS; i++) {
+        if (s_color_ep_shadow[i].valid && s_color_ep_shadow[i].matter_ep == matter_ep) {
+            return &s_color_ep_shadow[i];
+        }
+    }
+    for (int i = 0; i < COLOR_EP_SHADOW_SLOTS; i++) {
+        if (!s_color_ep_shadow[i].valid) {
+            s_color_ep_shadow[i].matter_ep = matter_ep;
+            s_color_ep_shadow[i].valid = true;
+            s_color_ep_shadow[i].have_x = s_color_ep_shadow[i].have_y = false;
+            s_color_ep_shadow[i].have_hue = s_color_ep_shadow[i].have_sat = false;
+            s_color_ep_shadow[i].x = s_color_ep_shadow[i].y = 0;
+            s_color_ep_shadow[i].hue = s_color_ep_shadow[i].sat = 0;
+            return &s_color_ep_shadow[i];
+        }
+    }
+    return NULL;
+}
+
 /* ==================== Bridge API 适配层（依赖注入） ==================== */
 
 /**
@@ -89,10 +124,63 @@ static uint8_t bridge_api_get_ep(uint16_t short_addr)
     return bridge_manager_get_endpoint_by_short(short_addr);
 }
 
+/* ---------------- 灯具状态上报（Zigbee → Matter） ---------------- */
+
+static void bridge_api_report_level(uint16_t short_addr, uint8_t endpoint, uint8_t level)
+{
+    app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+    if (!dev || !dev->dev || !dev->dev->endpoint) {
+        ESP_LOGW(TAG, "Cannot report Level: no bridge for 0x%04x", short_addr);
+        return;
+    }
+    uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
+    esp_matter_attr_val_t val = esp_matter_nullable_uint8(level);
+    esp_err_t err = attribute::update(matter_ep, LevelControl::Id,
+                                      LevelControl::Attributes::CurrentLevel::Id, &val);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Level attribute::update failed on ep %d: %s", matter_ep, esp_err_to_name(err));
+    }
+}
+
+static void bridge_api_report_color_xy(uint16_t short_addr, uint8_t endpoint, uint16_t x, uint16_t y)
+{
+    app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+    if (!dev || !dev->dev || !dev->dev->endpoint) {
+        ESP_LOGW(TAG, "Cannot report Color XY: no bridge for 0x%04x", short_addr);
+        return;
+    }
+    uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
+    esp_matter_attr_val_t vx = esp_matter_nullable_uint16(x);
+    esp_matter_attr_val_t vy = esp_matter_nullable_uint16(y);
+    esp_err_t e1 = attribute::update(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentX::Id, &vx);
+    esp_err_t e2 = attribute::update(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentY::Id, &vy);
+    if (e1 != ESP_OK) ESP_LOGE(TAG, "ColorX update failed on ep %d: %s", matter_ep, esp_err_to_name(e1));
+    if (e2 != ESP_OK) ESP_LOGE(TAG, "ColorY update failed on ep %d: %s", matter_ep, esp_err_to_name(e2));
+}
+
+static void bridge_api_report_color_hsv(uint16_t short_addr, uint8_t endpoint, uint8_t hue, uint8_t sat)
+{
+    app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+    if (!dev || !dev->dev || !dev->dev->endpoint) {
+        ESP_LOGW(TAG, "Cannot report Color HSV: no bridge for 0x%04x", short_addr);
+        return;
+    }
+    uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
+    esp_matter_attr_val_t vh = esp_matter_nullable_uint8(hue);
+    esp_matter_attr_val_t vs = esp_matter_nullable_uint8(sat);
+    esp_err_t e1 = attribute::update(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentHue::Id, &vh);
+    esp_err_t e2 = attribute::update(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentSaturation::Id, &vs);
+    if (e1 != ESP_OK) ESP_LOGE(TAG, "Hue update failed on ep %d: %s", matter_ep, esp_err_to_name(e1));
+    if (e2 != ESP_OK) ESP_LOGE(TAG, "Sat update failed on ep %d: %s", matter_ep, esp_err_to_name(e2));
+}
+
 /** Bridge API 实例（静态全局，在 init 中注册到 ZCL 层） */
 static const zcl_bridge_api_t s_bridge_api_impl = {
     .report_sensor = bridge_api_report_sensor,
     .report_on_off = bridge_api_report_on_off,
+    .report_level = bridge_api_report_level,
+    .report_color_xy = bridge_api_report_color_xy,
+    .report_color_hsv = bridge_api_report_color_hsv,
     .is_device_bridged = bridge_api_is_bridged,
     .get_endpoint_by_short = bridge_api_get_ep,
 };
@@ -178,6 +266,38 @@ esp_err_t bridge_manager_create_devices_cb(esp_matter::endpoint_t *ep, uint32_t 
         relative_humidity_measurement::create(ep, &humidity_conf, CLUSTER_FLAG_SERVER);
         break;
     }
+    case ESP_MATTER_EXTENDED_COLOR_LIGHT_DEVICE_TYPE_ID: {
+        /* 可扩展色灯：必须用设备类型 API add()。
+         * 它会把 ExtendedColorLight(0x010D) 写进端点 Descriptor 的 DeviceTypeList，
+         * 并且创建 OnOff+LevelControl+ColorControl 集群。
+         * 若像之前那样手动 on_off/level/color::create，端点只声明 BridgedNode(0x0013)，
+         * HA 无法识别为 light.*，会显示成 switch。 */
+        endpoint::extended_color_light::config_t light_conf;
+        light_conf.level_control.current_level = static_cast<uint8_t>(0);
+        light_conf.level_control.on_level = static_cast<uint8_t>(254);
+        esp_err_t err = endpoint::extended_color_light::add(ep, &light_conf);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add extended_color_light: %s", esp_err_to_name(err));
+            return err;
+        }
+        /* endpoint::extended_color_light::add() 默认只开启 color_temperature + xy 两个 feature，
+         * 未开 hue_saturation(HS)。而 HS(MoveToHueAndSaturation) 命令依赖 HS feature bit，
+         * 不开则 Matter 框架会直接返回 INVALID_COMMAND(0x81)，颜色无法用。这里补开，
+         * 使 FeatureMap = HS|XY，两种颜色命令都被接受。 */
+        esp_matter::cluster_t *cc = esp_matter::cluster::get(ep, ColorControl::Id);
+        if (cc) {
+            esp_matter::cluster::color_control::feature::hue_saturation::config_t hs_conf;
+            err = esp_matter::cluster::color_control::feature::hue_saturation::add(cc, &hs_conf);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to add hue_saturation feature: %s", esp_err_to_name(err));
+                return err;
+            }
+        } else {
+            ESP_LOGE(TAG, "ColorControl cluster not found on bridged ep after add");
+            return ESP_ERR_NOT_FOUND;
+        }
+        break;
+    }
     default:
         ESP_LOGE(TAG, "Unsupported bridged matter device type: 0x%04x", device_type_id);
         return ESP_ERR_INVALID_ARG;
@@ -199,6 +319,15 @@ esp_err_t bridge_manager_attr_update_cb(esp_matter::attribute::callback_type_t t
 }
 
 /* ==================== 桥接设备查询 ==================== */
+
+/* Zigbee 栈就绪标志：esp_zb_init() 之前为 false。
+ * 未就绪时禁止下发 Zigbee 命令（ZBOSS bufpool 尚未分配，调用会崩溃）。 */
+static volatile bool s_zb_stack_ready = false;
+
+void bridge_manager_set_zb_stack_ready(bool ready)
+{
+    s_zb_stack_ready = ready;
+}
 
 bool bridge_manager_is_device_bridged(uint16_t short_addr)
 {
@@ -232,31 +361,27 @@ void bridge_manager_on_device_discovered(uint16_t short_addr, uint8_t endpoint)
         return;
     }
 
-    /* 创建 Matter 桥接设备 */
-    node_t *node = node::get();
-    if (!node) {
-        ESP_LOGE(TAG, "Could not find esp_matter node");
-        return;
-    }
-
-    app_bridged_device_t *bridged_device =
-        app_bridge_create_bridged_device(node, s_aggregator_ep_id,
-                                         ESP_MATTER_TEMP_HUMIDITY_SENSOR_DEVICE_TYPE_ID,
-                                         ESP_MATTER_BRIDGED_DEVICE_TYPE_ZIGBEE,
-                                         app_bridge_zigbee_address(endpoint, short_addr), NULL);
-    if (!bridged_device) {
-        ESP_LOGE(TAG, "Failed to create bridged device for 0x%04x", short_addr);
-        return;
-    }
-
-    uint16_t matter_ep = app_bridge_get_matter_endpointid_by_zigbee_shortaddr(short_addr);
-    ESP_LOGI(TAG, "Created bridged device for 0x%04x on Matter endpoint %d", short_addr, matter_ep);
+    /* 此时还不知道型号/uiid，无法确定 Matter 端点类型（传感器 or 灯）。
+     * 因此不在此创建桥接设备，仅在 identified 拿到 uiid 后再按类型创建。
+     */
 
     /* 注册到 zboss_manager */
     zboss_manager_register_bridged_device(short_addr, endpoint);
 
-    /* 主动读取 Basic 属性 */
+    /* 主动读取 Basic 属性以确定型号/uiid */
     zdp_discovery_read_basic_attributes(short_addr, endpoint);
+}
+
+static uint32_t uiid_to_matter_device_type_id(uint16_t uiid)
+{
+    switch (uiid) {
+    case UIID_RGB_LED:
+        return ESP_MATTER_EXTENDED_COLOR_LIGHT_DEVICE_TYPE_ID;
+    case UIID_TEMP_HUMIDITY_SENSOR:
+    default:
+        /* 未知型号按温湿度传感器兜底 */
+        return ESP_MATTER_TEMP_HUMIDITY_SENSOR_DEVICE_TYPE_ID;
+    }
 }
 
 void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
@@ -289,38 +414,33 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
         return;
     }
 
-    /* ===== CASE 2: 新设备 ===== */
+    /* ===== CASE 2: 新设备 —— 在拿到 uiid 后按类型创建 Matter 端点 ===== */
     app_bridged_device_t *bridged = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
-    if (bridged) {
-        uint16_t matter_ep = app_bridge_get_matter_endpointid_by_zigbee_shortaddr(short_addr);
-        device_info_t *new_info = device_info_register(device_id, uiid, short_addr, endpoint, ieee_addr);
-        if (new_info) {
-            device_info_set_matter_endpoint(device_id, matter_ep);
-        }
-        ESP_LOGI(TAG, "New device associated: device_id=0x%08X, Matter ep=%d, zigbee=0x%04hx",
-                 (unsigned int)device_id, matter_ep, short_addr);
-    } else {
-        /* 防御性处理：创建桥接设备 */
-        ESP_LOGW(TAG, "No bridge for short_addr=0x%04hx (device_id=0x%08X), creating now",
-                 short_addr, (unsigned int)device_id);
+    if (!bridged) {
         node_t *node = node::get();
-        if (node) {
-            bridged = app_bridge_create_bridged_device(node, s_aggregator_ep_id,
-                                                       ESP_MATTER_TEMP_HUMIDITY_SENSOR_DEVICE_TYPE_ID,
-                                                       ESP_MATTER_BRIDGED_DEVICE_TYPE_ZIGBEE,
-                                                       app_bridge_zigbee_address(endpoint, short_addr), NULL);
-            if (bridged) {
-                uint16_t matter_ep = app_bridge_get_matter_endpointid_by_zigbee_shortaddr(short_addr);
-                device_info_t *new_info = device_info_register(device_id, uiid, short_addr, endpoint, ieee_addr);
-                if (new_info) {
-                    device_info_set_matter_endpoint(device_id, matter_ep);
-                }
-                zboss_manager_register_bridged_device(short_addr, endpoint);
-                ESP_LOGI(TAG, "Bridge created (deferred) for device_id=0x%08X on Matter ep %d",
-                         (unsigned int)device_id, matter_ep);
-            }
+        if (!node) {
+            ESP_LOGE(TAG, "Could not find esp_matter node");
+            return;
         }
+        bridged = app_bridge_create_bridged_device(node, s_aggregator_ep_id,
+                                                   uiid_to_matter_device_type_id(uiid),
+                                                   ESP_MATTER_BRIDGED_DEVICE_TYPE_ZIGBEE,
+                                                   app_bridge_zigbee_address(endpoint, short_addr), NULL);
+        if (!bridged) {
+            ESP_LOGE(TAG, "Failed to create bridged device for 0x%04x (device_id=0x%08X, uiid=0x%04hx)",
+                     short_addr, (unsigned int)device_id, uiid);
+            return;
+        }
+        zboss_manager_register_bridged_device(short_addr, endpoint);
     }
+
+    uint16_t matter_ep = app_bridge_get_matter_endpointid_by_zigbee_shortaddr(short_addr);
+    device_info_t *new_info = device_info_register(device_id, uiid, short_addr, endpoint, ieee_addr);
+    if (new_info) {
+        device_info_set_matter_endpoint(device_id, matter_ep);
+    }
+    ESP_LOGI(TAG, "New device associated: device_id=0x%08X, uiid=0x%04hx, Matter ep=%d, zigbee=0x%04hx",
+             (unsigned int)device_id, uiid, matter_ep, short_addr);
 
     zdp_discovery_send_register_status(short_addr, endpoint, 129);
 }
@@ -362,11 +482,184 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                                       esp_matter_attr_val_t *val,
                                       app_bridged_device_t *zigbee_device)
 {
-    if (!zigbee_device || !zigbee_device->dev || !zigbee_device->dev->endpoint) {
+    if (!zigbee_device || !zigbee_device->dev || !zigbee_device->dev->endpoint || !val) {
         ESP_LOGE(TAG, "Unable to update bridge device, ep=%" PRIu16 ", cluster=%" PRIu32 ", attr=%" PRIu32 "",
                  endpoint_id, cluster_id, attribute_id);
         return ESP_OK;
     }
-    /* TODO: 实现 Matter → Zigbee 的写入转发 */
+
+    /* Zigbee 栈未就绪（esp_zb_init 前，如开机 resume 端点时的属性 init 回调），
+     * 禁止下发命令，否则 ZBOSS bufpool 未分配会崩。 */
+    if (!s_zb_stack_ready) {
+        ESP_LOGD(TAG, "Zigbee stack not ready, skip downlink: ep=%" PRIu16 ", cluster=%" PRIu32 ", attr=%" PRIu32,
+                 endpoint_id, cluster_id, attribute_id);
+        return ESP_OK;
+    }
+
+    uint16_t zshort = zigbee_device->dev_addr.zigbee_shortaddr;
+    uint8_t zep = zigbee_device->dev_addr.zigbee_endpointid;
+
+    switch (cluster_id) {
+
+    case OnOff::Id:
+        if (attribute_id == OnOff::Attributes::OnOff::Id) {
+            bool on = val->val.b;
+            esp_zb_zcl_on_off_cmd_t cmd = {
+                .zcl_basic_cmd = {
+                    .dst_addr_u   = { .addr_short = zshort },
+                    .dst_endpoint = zep,
+                    .src_endpoint = HA_GW_ENDPOINT,
+                },
+                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+                .on_off_cmd_id = static_cast<uint8_t>(on ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID),
+            };
+            uint8_t seq = esp_zb_zcl_on_off_cmd_req(&cmd);
+            ESP_LOGI(TAG, "On/Off=%s sent to 0x%04x ep=%d (seq=%u)", on ? "ON" : "OFF", zshort, zep, seq);
+        }
+        break;
+
+    case LevelControl::Id:
+        if (attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
+            esp_zb_zcl_move_to_level_cmd_t cmd = {
+                .zcl_basic_cmd = {
+                    .dst_addr_u   = { .addr_short = zshort },
+                    .dst_endpoint = zep,
+                    .src_endpoint = HA_GW_ENDPOINT,
+                },
+                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+                .level = val->val.u8,
+                .transition_time = 0,
+            };
+            uint8_t seq = esp_zb_zcl_level_move_to_level_cmd_req(&cmd);
+            ESP_LOGI(TAG, "MoveToLevel=%u sent to 0x%04x ep=%d (seq=%u)", cmd.level, zshort, zep, seq);
+        }
+        break;
+
+    case ColorControl::Id: {
+        color_ep_shadow_t *shadow = color_ep_shadow_find(endpoint_id);
+        if (!shadow) {
+            ESP_LOGW(TAG, "No color shadow slot for ep %d, skip color downlink", endpoint_id);
+            break;
+        }
+        if (attribute_id == ColorControl::Attributes::CurrentX::Id) {
+            shadow->x = val->val.u16;
+            shadow->have_x = true;
+            if (!shadow->have_y) {
+                ESP_LOGI(TAG, "CurrentX=%u cached (Y not set yet), ep=%d", shadow->x, endpoint_id);
+                break;
+            }
+            esp_zb_zcl_color_move_to_color_cmd_t cmd = {
+                .zcl_basic_cmd = {
+                    .dst_addr_u   = { .addr_short = zshort },
+                    .dst_endpoint = zep,
+                    .src_endpoint = HA_GW_ENDPOINT,
+                },
+                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+                .color_x = shadow->x,
+                .color_y = shadow->y,
+                .transition_time = 0,
+            };
+            uint8_t seq = esp_zb_zcl_color_move_to_color_cmd_req(&cmd);
+            ESP_LOGI(TAG, "MoveToColor(x=%u,y=%u) sent to 0x%04x ep=%d (seq=%u)",
+                     cmd.color_x, cmd.color_y, zshort, zep, seq);
+            /* 发送后清零配对标志：下一轮必须等全新的 X+Y，避免用上一轮残留的旧值
+             * 先发出一条错误的中间命令，导致灯先闪到错误颜色再修正 */
+            shadow->have_x = false;
+            shadow->have_y = false;
+        } else if (attribute_id == ColorControl::Attributes::CurrentY::Id) {
+            shadow->y = val->val.u16;
+            shadow->have_y = true;
+            if (!shadow->have_x) {
+                ESP_LOGI(TAG, "CurrentY=%u cached (X not set yet), ep=%d", shadow->y, endpoint_id);
+                break;
+            }
+            esp_zb_zcl_color_move_to_color_cmd_t cmd = {
+                .zcl_basic_cmd = {
+                    .dst_addr_u   = { .addr_short = zshort },
+                    .dst_endpoint = zep,
+                    .src_endpoint = HA_GW_ENDPOINT,
+                },
+                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+                .color_x = shadow->x,
+                .color_y = shadow->y,
+                .transition_time = 0,
+            };
+            uint8_t seq = esp_zb_zcl_color_move_to_color_cmd_req(&cmd);
+            ESP_LOGI(TAG, "MoveToColor(x=%u,y=%u) sent to 0x%04x ep=%d (seq=%u)",
+                     cmd.color_x, cmd.color_y, zshort, zep, seq);
+            shadow->have_x = false;
+            shadow->have_y = false;
+        } else if (attribute_id == ColorControl::Attributes::CurrentHue::Id) {
+            shadow->hue = val->val.u8;
+            shadow->have_hue = true;
+            if (!shadow->have_sat) {
+                ESP_LOGI(TAG, "CurrentHue=%u cached (Sat not set yet), ep=%d", shadow->hue, endpoint_id);
+                break;
+            }
+            esp_zb_color_move_to_hue_saturation_cmd_t cmd = {
+                .zcl_basic_cmd = {
+                    .dst_addr_u   = { .addr_short = zshort },
+                    .dst_endpoint = zep,
+                    .src_endpoint = HA_GW_ENDPOINT,
+                },
+                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+                .hue = shadow->hue,
+                .saturation = shadow->sat,
+                .transition_time = 0,
+            };
+            uint8_t seq = esp_zb_zcl_color_move_to_hue_and_saturation_cmd_req(&cmd);
+            ESP_LOGI(TAG, "MoveToHueSat(h=%u,s=%u) sent to 0x%04x ep=%d (seq=%u)",
+                     cmd.hue, cmd.saturation, zshort, zep, seq);
+            /* 发送后清零配对标志：下一轮必须等全新的 H+S，避免用上一轮残留的旧值
+             * 先发出一条错误的中间命令，导致灯先闪到错误颜色再修正 */
+            shadow->have_hue = false;
+            shadow->have_sat = false;
+        } else if (attribute_id == ColorControl::Attributes::CurrentSaturation::Id) {
+            shadow->sat = val->val.u8;
+            shadow->have_sat = true;
+            if (!shadow->have_hue) {
+                ESP_LOGI(TAG, "CurrentSat=%u cached (Hue not set yet), ep=%d", shadow->sat, endpoint_id);
+                break;
+            }
+            esp_zb_color_move_to_hue_saturation_cmd_t cmd = {
+                .zcl_basic_cmd = {
+                    .dst_addr_u   = { .addr_short = zshort },
+                    .dst_endpoint = zep,
+                    .src_endpoint = HA_GW_ENDPOINT,
+                },
+                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+                .hue = shadow->hue,
+                .saturation = shadow->sat,
+                .transition_time = 0,
+            };
+            uint8_t seq = esp_zb_zcl_color_move_to_hue_and_saturation_cmd_req(&cmd);
+            ESP_LOGI(TAG, "MoveToHueSat(h=%u,s=%u) sent to 0x%04x ep=%d (seq=%u)",
+                     cmd.hue, cmd.saturation, zshort, zep, seq);
+            shadow->have_hue = false;
+            shadow->have_sat = false;
+        } else if (attribute_id == ColorControl::Attributes::ColorTemperatureMireds::Id) {
+            /* 色温下走：HA 的 MoveToColorTemperature 命令会更新 ColorTemperatureMireds 属性，
+             * 这里把它转发成 Zigbee 的 MoveToColorTemperature（color_temperature 单位同为 mireds） */
+            esp_zb_zcl_color_move_to_color_temperature_cmd_t cmd = {
+                .zcl_basic_cmd = {
+                    .dst_addr_u   = { .addr_short = zshort },
+                    .dst_endpoint = zep,
+                    .src_endpoint = HA_GW_ENDPOINT,
+                },
+                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+                .color_temperature = val->val.u16,
+                .transition_time = 0,
+            };
+            uint8_t seq = esp_zb_zcl_color_move_to_color_temperature_cmd_req(&cmd);
+            ESP_LOGI(TAG, "MoveToColorTemp(mireds=%u) sent to 0x%04x ep=%d (seq=%u)",
+                     cmd.color_temperature, zshort, zep, seq);
+        }
+        break;
+    }
+
+    default:
+        break;
+    }
+
     return ESP_OK;
 }

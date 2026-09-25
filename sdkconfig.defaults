@@ -63,6 +63,10 @@ CONFIG_SUPPORT_GROUPCAST_CLUSTER=n
 # Increase max dynamic endpoints for bridged Zigbee devices
 CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=32
 
+# Use custom Device Instance Info Provider so the Basic Information cluster
+# vendor name (manufacturer shown in HA) can be set to "XiaoNian"
+CONFIG_CUSTOM_DEVICE_INSTANCE_INFO_PROVIDER=y
+
 # Use IDF mDNS instead of CHIP's minimal mDNS
 # Minimal mDNS cannot fragment UDP broadcast packets,
 # causing "mDNS broadcast full failed" when multiple

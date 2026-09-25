@@ -344,6 +344,7 @@ uint16_t device_info_lookup_uiid(const char *model)
         uint16_t uiid;
     } s_model_uiid_map[] = {
         { "TH-01", 0x0001 },       /* 温湿度传感器 */
+        { "RGBLED-01", 0x0002 },   /* RGB 灯 */
         /* 后续设备型号在这里添加 */
     };
 

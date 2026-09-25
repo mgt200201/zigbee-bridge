@@ -44,6 +44,17 @@ typedef struct {
     /** 上报开关状态 */
     void (*report_on_off)(uint16_t short_addr, uint8_t endpoint, bool on);
 
+    /* ---- 灯具相关上报 ---- */
+
+    /** 上报亮度（0x0008 CurrentLevel，0-254） */
+    void (*report_level)(uint16_t short_addr, uint8_t endpoint, uint8_t level);
+
+    /** 上报颜色 XY（0x0300 CurrentX/CurrentY） */
+    void (*report_color_xy)(uint16_t short_addr, uint8_t endpoint, uint16_t x, uint16_t y);
+
+    /** 上报颜色 HSV（0x0300 CurrentHue/CurrentSaturation） */
+    void (*report_color_hsv)(uint16_t short_addr, uint8_t endpoint, uint8_t hue, uint8_t sat);
+
     /** 查询设备是否已创建 Matter 桥接 */
     bool (*is_device_bridged)(uint16_t short_addr);
 

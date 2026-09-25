@@ -22,6 +22,7 @@
  */
 
 #include "zboss_manager.h"
+#include "bridge_manager.h"
 #include "zdp_discovery.h"
 #include "watchdog.h"
 #include <esp_log.h>
@@ -141,6 +142,9 @@ static void zboss_task(void *pvParameters)
     esp_zb_overall_network_size_set(32);
 
     esp_zb_init(&zb_nwk_cfg);
+
+    /* 栈就绪：此后 Matter 下行属性更新才允许发送 Zigbee 命令 */
+    bridge_manager_set_zb_stack_ready(true);
 
     /* 注：esp_zb_nwk_set_ed_timeout / esp_zb_nwk_set_leave_req_allowed
      *     等为 test-utils 私有 API，当前版本已移除。安全策略使用 ZBOSS 默认值。 */

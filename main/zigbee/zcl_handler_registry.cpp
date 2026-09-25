@@ -28,6 +28,8 @@
 #include "handlers/handler_humidity.h"
 #include "handlers/handler_on_off.h"
 #include "handlers/handler_fc11.h"
+#include "handlers/handler_level.h"
+#include "handlers/handler_color.h"
 #include <esp_log.h>
 
 static const char *TAG = "zcl_registry";
@@ -189,12 +191,12 @@ void zcl_handlers_init(void)
     zcl_handler_register(&humidity_handler);
     zcl_handler_register(&on_off_handler);
     zcl_handler_register(&fc11_handler);
+    zcl_handler_register(&level_control_handler);   /* 0x0008 */
+    zcl_handler_register(&color_control_handler);   /* 0x0300 */
 
     /* ── 以后新增 cluster 只需在这里加一行 ── */
     /* zcl_handler_register(&illuminance_handler);    // 0x0400 */
     /* zcl_handler_register(&pressure_handler);       // 0x0401 */
-    /* zcl_handler_register(&level_control_handler);  // 0x0008 */
-    /* zcl_handler_register(&color_control_handler);  // 0x0300 */
 
     ESP_LOGI(TAG, "ZCL handlers ready: %d registered", s_handler_count);
 
