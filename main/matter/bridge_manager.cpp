@@ -85,6 +85,21 @@ static color_ep_shadow_t *color_ep_shadow_find(uint16_t matter_ep)
     return NULL;
 }
 
+/* ---- 上行(上报)标志：Zigbee→Matter 上报更新 Matter 属性时，
+       会触发 PRE_UPDATE(bridge_manager_attr_update) 把命令回发给 Zigbee，
+       形成 "上报 → 又下发改回 " 的反馈环（日志里可见 MoveToLevel/MoveToColor 被反复回发）。
+       置位后 bridge_manager_attr_update 提前返回，避免回发。 ---- */
+static bool s_processing_uplink = false;
+
+static esp_err_t bridge_set_attr_no_echo(uint16_t ep, uint32_t cluster, uint32_t attr,
+                                         esp_matter_attr_val_t *val)
+{
+    s_processing_uplink = true;
+    esp_err_t err = attribute::update(ep, cluster, attr, val);
+    s_processing_uplink = false;
+    return err;
+}
+
 /* ==================== Bridge API 适配层（依赖注入） ==================== */
 
 /**
@@ -107,8 +122,8 @@ static void bridge_api_report_on_off(uint16_t short_addr, uint8_t endpoint, bool
     }
     uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
     esp_matter_attr_val_t val = esp_matter_bool(on);
-    esp_err_t err = attribute::update(matter_ep, OnOff::Id,
-                                      OnOff::Attributes::OnOff::Id, &val);
+    esp_err_t err = bridge_set_attr_no_echo(matter_ep, OnOff::Id,
+                                            OnOff::Attributes::OnOff::Id, &val);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "On/Off attribute::update failed: %s", esp_err_to_name(err));
     }
@@ -134,9 +149,9 @@ static void bridge_api_report_level(uint16_t short_addr, uint8_t endpoint, uint8
         return;
     }
     uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
-    esp_matter_attr_val_t val = esp_matter_nullable_uint8(level);
-    esp_err_t err = attribute::update(matter_ep, LevelControl::Id,
-                                      LevelControl::Attributes::CurrentLevel::Id, &val);
+    esp_matter_attr_val_t val = esp_matter_uint8(level);
+    esp_err_t err = bridge_set_attr_no_echo(matter_ep, LevelControl::Id,
+                                            LevelControl::Attributes::CurrentLevel::Id, &val);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Level attribute::update failed on ep %d: %s", matter_ep, esp_err_to_name(err));
     }
@@ -150,10 +165,11 @@ static void bridge_api_report_color_xy(uint16_t short_addr, uint8_t endpoint, ui
         return;
     }
     uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
-    esp_matter_attr_val_t vx = esp_matter_nullable_uint16(x);
-    esp_matter_attr_val_t vy = esp_matter_nullable_uint16(y);
-    esp_err_t e1 = attribute::update(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentX::Id, &vx);
-    esp_err_t e2 = attribute::update(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentY::Id, &vy);
+    /* CurrentX/CurrentY 在该端点上是非可空 uint16，传可空值会因类型不匹配报 ESP_ERR_INVALID_ARG(258) */
+    esp_matter_attr_val_t vx = esp_matter_uint16(x);
+    esp_matter_attr_val_t vy = esp_matter_uint16(y);
+    esp_err_t e1 = bridge_set_attr_no_echo(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentX::Id, &vx);
+    esp_err_t e2 = bridge_set_attr_no_echo(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentY::Id, &vy);
     if (e1 != ESP_OK) ESP_LOGE(TAG, "ColorX update failed on ep %d: %s", matter_ep, esp_err_to_name(e1));
     if (e2 != ESP_OK) ESP_LOGE(TAG, "ColorY update failed on ep %d: %s", matter_ep, esp_err_to_name(e2));
 }
@@ -168,8 +184,8 @@ static void bridge_api_report_color_hsv(uint16_t short_addr, uint8_t endpoint, u
     uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
     esp_matter_attr_val_t vh = esp_matter_nullable_uint8(hue);
     esp_matter_attr_val_t vs = esp_matter_nullable_uint8(sat);
-    esp_err_t e1 = attribute::update(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentHue::Id, &vh);
-    esp_err_t e2 = attribute::update(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentSaturation::Id, &vs);
+    esp_err_t e1 = bridge_set_attr_no_echo(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentHue::Id, &vh);
+    esp_err_t e2 = bridge_set_attr_no_echo(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentSaturation::Id, &vs);
     if (e1 != ESP_OK) ESP_LOGE(TAG, "Hue update failed on ep %d: %s", matter_ep, esp_err_to_name(e1));
     if (e2 != ESP_OK) ESP_LOGE(TAG, "Sat update failed on ep %d: %s", matter_ep, esp_err_to_name(e2));
 }
@@ -395,7 +411,10 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
         uint16_t old_short_addr = info->short_addr;
         device_info_update_online(device_id, short_addr, endpoint, ieee_addr);
 
-        if (old_short_addr != short_addr && info->matter_endpoint_id != 0) {
+        if (old_short_addr != short_addr) {
+            /* 短地址变化时始终刷新 Matter bridge 的下行地址。
+             * 注意：不能依赖 info->matter_endpoint_id（网关重启后从 NVS 恢复为 0），
+             * 否则子设备断电换短地址重连时，下行仍发往旧的失效地址，导致 HA 无法控制。 */
             app_bridged_device_t *bridged = app_bridge_get_device_by_zigbee_shortaddr(old_short_addr);
             if (bridged) {
                 bridged->dev_addr.zigbee_shortaddr = short_addr;
@@ -470,7 +489,7 @@ void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,
         val.val.u16 = (uint16_t)raw_value;
     }
 
-    esp_err_t err = attribute::update(matter_ep, entry->matter_cluster, entry->matter_attr, &val);
+    esp_err_t err = bridge_set_attr_no_echo(matter_ep, entry->matter_cluster, entry->matter_attr, &val);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "attribute::update failed (cluster=0x%04x, ep=%d): %s",
                  cluster_id, matter_ep, esp_err_to_name(err));
@@ -482,9 +501,19 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                                       esp_matter_attr_val_t *val,
                                       app_bridged_device_t *zigbee_device)
 {
+    /* 【调试】确认 HA 命令路径是否真的触发本回调，以及 zigbee_device 是否为 NULL */
+    ESP_LOGI(TAG, "[CB] attr_update: ep=%d cluster=0x%04x attr=0x%04x val_type=%d dev=%s",
+             endpoint_id, cluster_id, attribute_id,
+             val ? val->type : -1, zigbee_device ? "non-null" : "NULL");
+
     if (!zigbee_device || !zigbee_device->dev || !zigbee_device->dev->endpoint || !val) {
         ESP_LOGE(TAG, "Unable to update bridge device, ep=%" PRIu16 ", cluster=%" PRIu32 ", attr=%" PRIu32 "",
                  endpoint_id, cluster_id, attribute_id);
+        return ESP_OK;
+    }
+
+    /* 上报(属性值由 Zigbee 上行写入)过程中触发本回调时，禁止回发命令，避免反馈环 */
+    if (s_processing_uplink) {
         return ESP_OK;
     }
 

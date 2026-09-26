@@ -19,6 +19,8 @@ static const char *TAG = "device_info";
 /** NVS key 前缀 + 格式 */
 #define NVS_KEY_UIID_PREFIX  "uiid_"
 #define NVS_KEY_UIID_FMT     NVS_KEY_UIID_PREFIX "%08X"
+#define NVS_KEY_MEN_PREFIX   "men_"
+#define NVS_KEY_MEN_FMT      NVS_KEY_MEN_PREFIX "%08X"
 
 /** 设备信息内存表 */
 static device_info_t s_device_infos[MAX_DEVICE_INFO] = {0};
@@ -33,6 +35,11 @@ static device_info_t s_device_infos[MAX_DEVICE_INFO] = {0};
 static void make_nvs_key(uint32_t device_id, char *key)
 {
     sprintf(key, NVS_KEY_UIID_FMT, (unsigned int)device_id);
+}
+
+static void make_men_nvs_key(uint32_t device_id, char *key)
+{
+    sprintf(key, NVS_KEY_MEN_FMT, (unsigned int)device_id);
 }
 
 /**
@@ -90,6 +97,15 @@ void device_info_init(void)
                         dev->short_addr = 0xFFFF;
                         dev->zigbee_endpoint = 0;
                         dev->matter_endpoint_id = 0;
+                        /* 恢复持久化的 matter_endpoint_id（若无则保持 0） */
+                        {
+                            char men_key[16];
+                            uint16_t men = 0;
+                            make_men_nvs_key(device_id, men_key);
+                            if (nvs_get_u16(handle, men_key, &men) == ESP_OK) {
+                                dev->matter_endpoint_id = men;
+                            }
+                        }
                         memset(dev->ieee_addr, 0, sizeof(esp_zb_ieee_addr_t));
                         dev->manufacturer[0] = '\0';
                         dev->model[0] = '\0';
@@ -263,11 +279,10 @@ void device_info_remove_by_device_id(uint32_t device_id)
         char key[16];
         make_nvs_key(device_id, key);
         err = nvs_erase_key(handle, key);
-        if (err == ESP_OK) {
+        make_men_nvs_key(device_id, key);
+        nvs_erase_key(handle, key);
+        if (err == ESP_OK || err == ESP_ERR_NVS_NOT_FOUND) {
             nvs_commit(handle);
-            ESP_LOGI(TAG, "Erased NVS key '%s' for device_id=0x%08X", key, (unsigned int)device_id);
-        } else {
-            ESP_LOGW(TAG, "Failed to erase NVS key '%s': %s", key, esp_err_to_name(err));
         }
         nvs_close(handle);
     }
@@ -280,9 +295,22 @@ void device_info_remove_by_device_id(uint32_t device_id)
 void device_info_set_matter_endpoint(uint32_t device_id, uint16_t matter_endpoint_id)
 {
     device_info_t *dev = device_info_find_by_device_id(device_id);
-    if (dev) {
-        dev->matter_endpoint_id = matter_endpoint_id;
-        ESP_LOGI(TAG, "Device 0x%08X -> Matter endpoint %d", (unsigned int)device_id, matter_endpoint_id);
+    if (!dev) {
+        return;
+    }
+    dev->matter_endpoint_id = matter_endpoint_id;
+    ESP_LOGI(TAG, "Device 0x%08X -> Matter endpoint %d", (unsigned int)device_id, matter_endpoint_id);
+
+    /* 持久化 matter_endpoint_id，避免网关重启后恢复为 0。 */
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        char key[16];
+        make_men_nvs_key(device_id, key);
+        if (nvs_set_u16(handle, key, matter_endpoint_id) == ESP_OK) {
+            nvs_commit(handle);
+        }
+        nvs_close(handle);
     }
 }
 

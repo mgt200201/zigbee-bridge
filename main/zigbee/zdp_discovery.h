@@ -69,6 +69,30 @@ void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint);
 void zdp_discovery_configure_reporting(uint16_t short_addr, uint8_t endpoint);
 
 /**
+ * @brief 彩色灯 (uiid 0x0002) 入网后主动配置属性上报
+ *
+ * 向子设备下发 Configure Reporting，使其主动上报：
+ *   - OnOff 开关状态
+ *   - Level 亮度 CurrentLevel
+ *   - ColorControl 色彩 (Hue/Sat/X/Y/ColorMode) 与色温 (ColorTemperatureMireds)
+ *
+ * @param short_addr 目标设备短地址
+ * @param endpoint   目标设备端点号
+ */
+void zdp_discovery_configure_color_reporting(uint16_t short_addr, uint8_t endpoint);
+
+/**
+ * @brief 将彩灯 (uiid 0x0002) 的 OnOff/Level/ColorControl 集群绑定到网关端点
+ *
+ * Configure Reporting 需要配合绑定，报告才有目的地址；仅首次配网时下发。
+ *
+ * @param short_addr 子设备短地址（请求发往地址）
+ * @param endpoint   子设备上的源端点
+ * @param src_ieee   子设备的 IEEE 地址（绑定记录里的源地址）
+ */
+void zdp_discovery_bind_light(uint16_t short_addr, uint8_t endpoint, esp_zb_ieee_addr_t src_ieee);
+
+/**
  * @brief 通过私有集群 0xFC11 属性 0x1FFF 下发设备注册状态
  *
  * 用于协调器与子设备之间的注册流程握手机制：
