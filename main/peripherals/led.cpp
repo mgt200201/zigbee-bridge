@@ -129,3 +129,64 @@ bool led_is_blinking(void)
 {
     return s_blinking;
 }
+
+/* ---- 不对称(亮/灭不同时长)闪烁 ---- */
+
+/** 当前 pattern 模式的亮/灭时长 */
+static uint32_t s_pattern_on_ms = 100;
+static uint32_t s_pattern_off_ms = 400;
+
+/**
+ * @brief pattern 定时器回调：单次触发，根据当前逻辑状态切换亮灭并重新武装
+ */
+static void pattern_timer_cb(void *arg)
+{
+    (void)arg;
+    if (s_on) {
+        led_off();
+        if (s_pattern_off_ms > 0) {
+            esp_timer_start_once(s_blink_timer, s_pattern_off_ms * 1000);
+        }
+    } else {
+        led_on();
+        if (s_pattern_on_ms > 0) {
+            esp_timer_start_once(s_blink_timer, s_pattern_on_ms * 1000);
+        }
+    }
+}
+
+void led_blink_start_pattern(uint32_t on_ms, uint32_t off_ms)
+{
+    if (s_blink_timer) {
+        /* 如果已在闪烁，先停止再重新开始 */
+        led_blink_stop();
+    }
+
+    s_pattern_on_ms = on_ms;
+    s_pattern_off_ms = off_ms;
+
+    const esp_timer_create_args_t timer_args = {
+        .callback = &pattern_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "led_blink_pattern",
+        .skip_unhandled_events = true,
+    };
+
+    esp_err_t err = esp_timer_create(&timer_args, &s_blink_timer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Pattern timer create failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    /* 先点亮，on_ms 后进入灭→亮循环 */
+    led_on();
+    err = esp_timer_start_once(s_blink_timer, on_ms * 1000);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Pattern timer start failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    s_blinking = true;
+    ESP_LOGI(TAG, "LED pattern started: on=%u ms, off=%u ms", on_ms, off_ms);
+}

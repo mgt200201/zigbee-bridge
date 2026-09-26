@@ -43,6 +43,13 @@ void led_toggle(void);
  */
 void led_blink_start(uint32_t interval_ms);
 
+/**
+ * @brief 开始以不对称亮/灭时长闪烁（如 100ms 亮 / 400ms 灭）
+ * @param on_ms 点亮时长（毫秒）
+ * @param off_ms 熄灭时长（毫秒）
+ */
+void led_blink_start_pattern(uint32_t on_ms, uint32_t off_ms);
+
 /** 停止闪烁 */
 void led_blink_stop(void);
 

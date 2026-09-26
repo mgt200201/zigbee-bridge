@@ -31,6 +31,9 @@ static int  s_steering_start_ms = 0;
 /* ── Steering 回调 ── */
 static zigbee_net_steering_cb_t s_steering_cb = NULL;
 
+/* ── 网络就绪回调 ── */
+static zigbee_net_ready_cb_t s_ready_cb = NULL;
+
 /* ── 超时定时器 ── */
 static esp_timer_handle_t s_steering_timer = NULL;
 
@@ -113,6 +116,11 @@ void zigbee_net_register_steering_cb(zigbee_net_steering_cb_t cb)
     s_steering_cb = cb;
 }
 
+void zigbee_net_register_ready_cb(zigbee_net_ready_cb_t cb)
+{
+    s_ready_cb = cb;
+}
+
 /* ==================== 超时定时器 ==================== */
 
 static void steering_timer_cb(void *arg)
@@ -129,6 +137,9 @@ static void steering_timer_cb(void *arg)
 void zigbee_net_set_formed(bool formed)
 {
     s_formed = formed;
+    if (formed && s_ready_cb) {
+        s_ready_cb(); /* 协调器网络组建成功 → 通知系统就绪 */
+    }
 }
 
 bool zigbee_net_is_active(void)

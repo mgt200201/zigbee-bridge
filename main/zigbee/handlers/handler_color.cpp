@@ -124,6 +124,16 @@ static esp_err_t color_report_attr(const esp_zb_zcl_report_attr_message_t *msg)
         }
         break;
 
+    case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID:
+        {
+            uint16_t mireds = COLOR_VAL_U16();
+            ESP_LOGI(TAG, "0x%04x ep=%d: mireds=%u", short_addr, msg->src_endpoint, mireds);
+            if (api && api->report_color_temperature) {
+                api->report_color_temperature(short_addr, msg->src_endpoint, mireds);
+            }
+        }
+        break;
+
     default:
         zcl_metrics_record_error(ZCL_ERR_SEVERITY_PERMANENT, TAG,
                                   "0x%04x: unhandled attr 0x%04x", short_addr, msg->attribute.id);

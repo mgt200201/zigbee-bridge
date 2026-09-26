@@ -10,8 +10,37 @@
 #include <esp_log.h>
 #include <nvs_flash.h>
 #include <nvs.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "device_info";
+
+/* ==================== 线程安全互斥锁 ====================
+ * s_device_infos 会被多个任务(如 ZBOSS 上行上报、Matter 下行、入网识别)并发读写，
+ * 必须加锁防止读写冲突。公开函数之间存在相互调用(如 register 调 find_by_*)，
+ * 因此使用可重入互斥锁并用 RAII 守卫，避免嵌套死锁、也避免漏解锁。 */
+static SemaphoreHandle_t get_mutex(void)
+{
+    /* C++11 函数内局部静态变量初始化是线程安全的 */
+    static SemaphoreHandle_t m = xSemaphoreCreateRecursiveMutex();
+    return m;
+}
+
+static void db_lock(void)
+{
+    xSemaphoreTakeRecursive(get_mutex(), portMAX_DELAY);
+}
+
+static void db_unlock(void)
+{
+    xSemaphoreGiveRecursive(get_mutex());
+}
+
+class MutexGuard {
+public:
+    MutexGuard()  { db_lock(); }
+    ~MutexGuard() { db_unlock(); }
+};
 
 /** NVS 命名空间 */
 #define NVS_NAMESPACE "device_db"
@@ -60,6 +89,7 @@ static int find_free_slot(void)
 
 void device_info_init(void)
 {
+    MutexGuard guard;
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
     if (err != ESP_OK) {
@@ -128,6 +158,7 @@ void device_info_init(void)
 
 device_info_t *device_info_find_by_device_id(uint32_t device_id)
 {
+    MutexGuard guard;
     if (device_id == DEVICE_ID_UNKNOWN) {
         return NULL;
     }
@@ -141,6 +172,7 @@ device_info_t *device_info_find_by_device_id(uint32_t device_id)
 
 device_info_t *device_info_find_by_short_addr(uint16_t short_addr)
 {
+    MutexGuard guard;
     if (short_addr == 0xFFFF) {
         return NULL;
     }
@@ -154,6 +186,7 @@ device_info_t *device_info_find_by_short_addr(uint16_t short_addr)
 
 device_info_t *device_info_find_by_ieee(const esp_zb_ieee_addr_t ieee)
 {
+    MutexGuard guard;
     for (int i = 0; i < MAX_DEVICE_INFO; i++) {
         if (s_device_infos[i].in_use &&
             memcmp(s_device_infos[i].ieee_addr, ieee, sizeof(esp_zb_ieee_addr_t)) == 0) {
@@ -167,6 +200,7 @@ device_info_t *device_info_register(uint32_t device_id, uint16_t uiid,
                                      uint16_t short_addr, uint8_t zigbee_endpoint,
                                      const esp_zb_ieee_addr_t ieee_addr)
 {
+    MutexGuard guard;
     if (device_id == DEVICE_ID_UNKNOWN || device_id == 0) {
         ESP_LOGW(TAG, "Invalid device_id=0x%08X, denying registration", (unsigned int)device_id);
         return NULL;
@@ -230,6 +264,7 @@ device_info_t *device_info_register(uint32_t device_id, uint16_t uiid,
 void device_info_update_online(uint32_t device_id, uint16_t short_addr,
                                 uint8_t zigbee_endpoint, const esp_zb_ieee_addr_t ieee_addr)
 {
+    MutexGuard guard;
     device_info_t *dev = device_info_find_by_device_id(device_id);
     if (!dev) {
         ESP_LOGW(TAG, "Cannot update online: device_id=0x%08X not found", (unsigned int)device_id);
@@ -253,6 +288,7 @@ void device_info_update_online(uint32_t device_id, uint16_t short_addr,
 
 void device_info_set_offline(uint16_t short_addr)
 {
+    MutexGuard guard;
     device_info_t *dev = device_info_find_by_short_addr(short_addr);
     if (dev) {
         dev->online = false;
@@ -267,6 +303,7 @@ void device_info_remove_by_device_id(uint32_t device_id)
         return;
     }
 
+    MutexGuard guard;
     device_info_t *dev = device_info_find_by_device_id(device_id);
     if (!dev) {
         return;
@@ -294,6 +331,7 @@ void device_info_remove_by_device_id(uint32_t device_id)
 
 void device_info_set_matter_endpoint(uint32_t device_id, uint16_t matter_endpoint_id)
 {
+    MutexGuard guard;
     device_info_t *dev = device_info_find_by_device_id(device_id);
     if (!dev) {
         return;
@@ -316,11 +354,13 @@ void device_info_set_matter_endpoint(uint32_t device_id, uint16_t matter_endpoin
 
 bool device_info_is_registered(uint32_t device_id)
 {
+    MutexGuard guard;
     return device_info_find_by_device_id(device_id) != NULL;
 }
 
 int device_info_get_online_count(void)
 {
+    MutexGuard guard;
     int count = 0;
     for (int i = 0; i < MAX_DEVICE_INFO; i++) {
         if (s_device_infos[i].in_use && s_device_infos[i].online) {
@@ -332,6 +372,7 @@ int device_info_get_online_count(void)
 
 int device_info_get_count(void)
 {
+    MutexGuard guard;
     int count = 0;
     for (int i = 0; i < MAX_DEVICE_INFO; i++) {
         if (s_device_infos[i].in_use) {
@@ -343,6 +384,7 @@ int device_info_get_count(void)
 
 device_info_t *device_info_get_by_index(int index)
 {
+    MutexGuard guard;
     int count = 0;
     for (int i = 0; i < MAX_DEVICE_INFO; i++) {
         if (s_device_infos[i].in_use) {

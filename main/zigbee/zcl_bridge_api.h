@@ -55,6 +55,9 @@ typedef struct {
     /** 上报颜色 HSV（0x0300 CurrentHue/CurrentSaturation） */
     void (*report_color_hsv)(uint16_t short_addr, uint8_t endpoint, uint8_t hue, uint8_t sat);
 
+    /** 上报色温（0x0300 ColorTemperature=0x0007, 单位 mireds） */
+    void (*report_color_temperature)(uint16_t short_addr, uint8_t endpoint, uint16_t mireds);
+
     /** 查询设备是否已创建 Matter 桥接 */
     bool (*is_device_bridged)(uint16_t short_addr);
 

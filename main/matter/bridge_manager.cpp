@@ -27,6 +27,7 @@
 #include <zboss_manager.h>
 #include <zdp_discovery.h>
 #include <zcl_bridge_api.h>
+#include <matter/app_status.h>
 #include <wifi_manager.h>
 #include <esp_check.h>
 #include <esp_err.h>
@@ -149,7 +150,13 @@ static void bridge_api_report_level(uint16_t short_addr, uint8_t endpoint, uint8
         return;
     }
     uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
-    esp_matter_attr_val_t val = esp_matter_uint8(level);
+    /* CurrentLevel 槽位是可空 uint8（Matter 规范中 LevelControl 为 nullable），
+     * 往可空槽位写非可空值 esp_matter_uint8 会报 ESP_ERR_INVALID_ARG(258)。
+     * 因此用可空类型 esp_matter_nullable_uint8 上报；
+     * 并把 0xFF(255) 钳制为 254，避免触发 null 哨兵，否则 CurrentLevel 变 null 后，
+     * HA 下发 OnOff/MoveToLevel 时 CopyCurrentLevel 读到 null 会拒绝，灯无法控制。 */
+    uint8_t lv = (level == 0xFF) ? 0xFE : level;
+    esp_matter_attr_val_t val = esp_matter_nullable_uint8(lv);
     esp_err_t err = bridge_set_attr_no_echo(matter_ep, LevelControl::Id,
                                             LevelControl::Attributes::CurrentLevel::Id, &val);
     if (err != ESP_OK) {
@@ -190,6 +197,22 @@ static void bridge_api_report_color_hsv(uint16_t short_addr, uint8_t endpoint, u
     if (e2 != ESP_OK) ESP_LOGE(TAG, "Sat update failed on ep %d: %s", matter_ep, esp_err_to_name(e2));
 }
 
+static void bridge_api_report_color_temperature(uint16_t short_addr, uint8_t endpoint, uint16_t mireds)
+{
+    app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+    if (!dev || !dev->dev || !dev->dev->endpoint) {
+        ESP_LOGW(TAG, "Cannot report ColorTemperature: no bridge for 0x%04x", short_addr);
+        return;
+    }
+    uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
+    esp_matter_attr_val_t val = esp_matter_uint16(mireds);
+    esp_err_t err = bridge_set_attr_no_echo(matter_ep, ColorControl::Id,
+                                            ColorControl::Attributes::ColorTemperatureMireds::Id, &val);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ColorTemperature update failed on ep %d: %s", matter_ep, esp_err_to_name(err));
+    }
+}
+
 /** Bridge API 实例（静态全局，在 init 中注册到 ZCL 层） */
 static const zcl_bridge_api_t s_bridge_api_impl = {
     .report_sensor = bridge_api_report_sensor,
@@ -197,6 +220,7 @@ static const zcl_bridge_api_t s_bridge_api_impl = {
     .report_level = bridge_api_report_level,
     .report_color_xy = bridge_api_report_color_xy,
     .report_color_hsv = bridge_api_report_color_hsv,
+    .report_color_temperature = bridge_api_report_color_temperature,
     .is_device_bridged = bridge_api_is_bridged,
     .get_endpoint_by_short = bridge_api_get_ep,
 };
@@ -225,6 +249,7 @@ void bridge_manager_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "Commissioning complete");
+        app_status_notify_ready(); /* 配网完成 → 标记已配网(fabric) */
         break;
 
     case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:

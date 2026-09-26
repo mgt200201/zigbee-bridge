@@ -15,8 +15,36 @@
 #include "zigbee_device_db.h"
 #include <esp_log.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "zb_db";
+
+/* ==================== 线程安全互斥锁 ====================
+ * s_devices / s_ep_map 会被多个任务并发读写，必须加锁防止冲突。
+ * 内部函数存在相互调用(如 add_or_update 调 find_by_*)，
+ * 因此使用可重入互斥锁并用 RAII 守卫，避免嵌套死锁与漏解锁。 */
+static SemaphoreHandle_t get_mutex(void)
+{
+    static SemaphoreHandle_t m = xSemaphoreCreateRecursiveMutex();
+    return m;
+}
+
+static void db_lock(void)
+{
+    xSemaphoreTakeRecursive(get_mutex(), portMAX_DELAY);
+}
+
+static void db_unlock(void)
+{
+    xSemaphoreGiveRecursive(get_mutex());
+}
+
+class MutexGuard {
+public:
+    MutexGuard()  { db_lock(); }
+    ~MutexGuard() { db_unlock(); }
+};
 
 /* ── 已知设备列表 ── */
 static zigbee_db_device_t s_devices[ZIGBEE_DB_MAX_DEVICES] = {0};
@@ -36,11 +64,13 @@ static ep_map_t s_ep_map[MAX_BRIDGED_EPS] = {0};
 
 zigbee_db_device_t *zigbee_db_get_all(void)
 {
+    MutexGuard guard;
     return s_devices;
 }
 
 zigbee_db_device_t *zigbee_db_find_by_ieee(const esp_zb_ieee_addr_t ieee)
 {
+    MutexGuard guard;
     for (int i = 0; i < ZIGBEE_DB_MAX_DEVICES; i++) {
         if (s_devices[i].in_use &&
             memcmp(s_devices[i].ieee_addr, ieee, sizeof(esp_zb_ieee_addr_t)) == 0) {
@@ -52,6 +82,7 @@ zigbee_db_device_t *zigbee_db_find_by_ieee(const esp_zb_ieee_addr_t ieee)
 
 zigbee_db_device_t *zigbee_db_find_by_short(uint16_t short_addr)
 {
+    MutexGuard guard;
     for (int i = 0; i < ZIGBEE_DB_MAX_DEVICES; i++) {
         if (s_devices[i].in_use && s_devices[i].short_addr == short_addr) {
             return &s_devices[i];
@@ -62,6 +93,7 @@ zigbee_db_device_t *zigbee_db_find_by_short(uint16_t short_addr)
 
 void zigbee_db_add_or_update(const esp_zb_ieee_addr_t ieee, uint16_t short_addr)
 {
+    MutexGuard guard;
     /* 1. 按 IEEE 查找 → 更新 short_addr */
     zigbee_db_device_t *dev = zigbee_db_find_by_ieee(ieee);
     if (dev) {
@@ -103,6 +135,7 @@ void zigbee_db_add_or_update(const esp_zb_ieee_addr_t ieee, uint16_t short_addr)
 
 void zigbee_db_register_ep(uint16_t short_addr, uint8_t endpoint)
 {
+    MutexGuard guard;
     for (int i = 0; i < MAX_BRIDGED_EPS; i++) {
         if (!s_ep_map[i].in_use) {
             s_ep_map[i].in_use = true;
@@ -118,6 +151,7 @@ void zigbee_db_register_ep(uint16_t short_addr, uint8_t endpoint)
 
 uint16_t zigbee_db_short_by_ep(uint8_t endpoint)
 {
+    MutexGuard guard;
     for (int i = 0; i < MAX_BRIDGED_EPS; i++) {
         if (s_ep_map[i].in_use && s_ep_map[i].zigbee_endpoint == endpoint) {
             return s_ep_map[i].short_addr;
@@ -128,6 +162,7 @@ uint16_t zigbee_db_short_by_ep(uint8_t endpoint)
 
 uint8_t zigbee_db_ep_by_short(uint16_t short_addr)
 {
+    MutexGuard guard;
     for (int i = 0; i < MAX_BRIDGED_EPS; i++) {
         if (s_ep_map[i].in_use && s_ep_map[i].short_addr == short_addr) {
             return s_ep_map[i].zigbee_endpoint;

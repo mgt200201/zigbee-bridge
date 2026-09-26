@@ -56,6 +56,15 @@ typedef void (*zigbee_net_steering_cb_t)(bool active);
 
 void zigbee_net_register_steering_cb(zigbee_net_steering_cb_t cb);
 
+/* ==================== 网络就绪回调 ==================== */
+
+typedef void (*zigbee_net_ready_cb_t)(void);
+
+/**
+ * @brief 注册网络就绪回调：协调器 network formation 成功（网络可用）时触发
+ */
+void zigbee_net_register_ready_cb(zigbee_net_ready_cb_t cb);
+
 /* ==================== 内部接口（仅 zboss_manager.cpp 调用） ==================== */
 
 void zigbee_net_set_formed(bool formed);

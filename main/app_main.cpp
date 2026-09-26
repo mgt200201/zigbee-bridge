@@ -31,6 +31,7 @@
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
+#include <esp_timer.h>
 
 #include <platform/ESP32/ESP32Config.h>
 
@@ -55,6 +56,10 @@
 #include <commissioning_mgr.h>
 #include <button.h>
 #include <led.h>
+#include <app/server/Server.h>
+#include <transport/Session.h>
+#include <transport/SecureSession.h>
+#include <matter/app_status.h>
 #include "build_info.h"
 #include "self_test.h"
 #include "watchdog.h"
@@ -63,6 +68,94 @@ static const char *TAG = "app_main";
 
 using namespace esp_matter;
 using namespace esp_matter::endpoint;
+
+/* ---------------- 系统状态 LED ----------------
+ * 用状态灯（复用 GPIO10）表示运行状态。就绪(常亮)采用"确认就绪"机制：
+ *   周期轮询网关的活跃 Matter 安全会话，一旦检测到有控制器（HA）连上来，
+ *   且 已配网(fabric) && Zigbee 网络组建成功 两个基础条件也满足，
+ *   就立即常亮——这是真实确认，无需猜计时。
+ *   活跃的 CASE 安全会话本身就是"网关已就绪、此刻即可被控制"的最强证据，
+ *   因此不再依赖 kOperationalNetworkStarted 等可能不在重启/已配网路径触发的信号。
+ *   - 未就绪（刚上电 / 条件未齐 / 尚无 HA 会话）：100ms 亮 / 400ms 灭
+ *   - 开放入网（Zigbee steering 激活）：500ms 对称闪烁（优先级最高）
+ *   - 就绪（已配网 && Zigbee 就绪 && 检测到活跃会话）：常亮
+ */
+#define STATUS_READY_POLL_MS     2000UL
+
+static volatile bool s_steering_active     = false; /* Zigbee 入网窗口是否开启 */
+static volatile bool s_gateway_ready       = false; /* Matter 是否已配网(fabric) */
+static volatile bool s_zigbee_ready        = false; /* Zigbee 协调器网络是否组建成功 */
+static volatile bool s_confirmed_ready     = false; /* 已确认就绪（检测到活跃会话） */
+static bool s_poll_timer_started = false;
+static esp_timer_handle_t s_ready_poll_timer = NULL;
+
+static void status_led_refresh(void);
+
+/** 统计当前活跃的 Matter 安全会话数（HA 重连会自动建立 CASE 会话/订阅） */
+static int active_secure_session_count(void)
+{
+    int count = 0;
+    auto &mgr = chip::Server::GetInstance().GetSecureSessionManager();
+    mgr.ForEachSessionHandle(&count, [](void *ctx, chip::SessionHandle &handle) -> bool {
+        if (handle->IsActiveSession()) {
+            ++(*(static_cast<int *>(ctx)));
+        }
+        return true; /* 继续遍历 */
+    });
+    return count;
+}
+
+/** 就绪确认轮询：检测到活跃会话且基础条件齐 → 常亮 */
+static void ready_poll_cb(void *arg)
+{
+    (void)arg;
+    if (!s_confirmed_ready && !s_steering_active &&
+        s_gateway_ready && s_zigbee_ready &&
+        active_secure_session_count() > 0) {
+        s_confirmed_ready = true;
+        ESP_LOGI(TAG, "Ready confirmed: active Matter session detected");
+        status_led_refresh();
+    }
+}
+
+/** 根据当前状态刷新 LED（优先级：入网 > 确认就绪 > 未就绪） */
+static void status_led_refresh(void)
+{
+    if (s_steering_active) {
+        led_blink_start(500);            /* 入网指示优先 */
+    } else if (s_confirmed_ready) {
+        led_blink_stop();
+        led_on();                        /* 确认就绪常亮 */
+    } else {
+        led_blink_start_pattern(100, 400); /* 未就绪：100ms 亮/400ms 灭 */
+    }
+}
+
+/** 由 bridge_manager / app_main 调用：标记已配网(fabric)并刷新 LED */
+extern "C" void app_status_notify_ready(void)
+{
+    s_gateway_ready = true;
+    status_led_refresh();
+}
+
+/** 启动就绪确认轮询（在 esp_matter::start() 之后调用） */
+static void status_ready_poll_start(void)
+{
+    if (s_poll_timer_started) {
+        return;
+    }
+    const esp_timer_create_args_t args = {
+        .callback = &ready_poll_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "status_poll",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&args, &s_ready_poll_timer) == ESP_OK) {
+        esp_timer_start_periodic(s_ready_poll_timer, STATUS_READY_POLL_MS * 1000);
+        s_poll_timer_started = true;
+    }
+}
 
 /* ---------------- 自定义 Device Instance Info Provider ----------------
  * Matter Basic Information 集群的 VendorName(制造商) 读取走
@@ -199,6 +292,7 @@ extern "C" void app_main(void)
 
     button_init(GPIO_NUM_9);
     led_init(GPIO_NUM_10, false); /* active_low=false: 高电平点亮 */
+    status_led_refresh();         /* 刚上电：100ms 亮 / 400ms 灭（未就绪） */
     ESP_LOGI(TAG, "Peripherals initialized");
 
     /* ---- 第 2 层：Matter 协议栈初始化 ---- */
@@ -224,6 +318,14 @@ extern "C" void app_main(void)
     err = app_bridge_initialize(node, bridge_manager_create_devices_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume bridged endpoints: %d", err));
 
+    /* 重启后若已配网过，标记 Matter 已配网（fabric）。常亮还需检测到 HA 活跃会话。 */
+    if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
+        app_status_notify_ready();
+    }
+
+    /* 启动就绪确认轮询（检测 HA 活跃会话 → 常亮） */
+    status_ready_poll_start();
+
 /* CHIP shell console 与 serial_cmd 任务共享 UART0 会导致 spinlock 冲突，已禁用。
      * 改用下面 app_main 中独立的 serial_cmd 任务处理串口命令。 */
 #if 0
@@ -245,16 +347,19 @@ extern "C" void app_main(void)
     /* ---- 第 3 层：Zigbee 协议栈启动 ---- */
     zdp_discovery_init();
 
-    /* 注册 Steering ↔ LED 联动回调（zboss_manager 内部定时检查超时自动关闭） */
+    /* 注册 Steering ↔ LED 联动回调（并入状态机：入网激活时 500ms 闪烁） */
     zboss_manager_register_steering_callback([](bool active) {
-        if (active) {
-            led_blink_start(500);
-        } else {
-            led_blink_stop();
-            led_off();
-        }
+        s_steering_active = active;
+        status_led_refresh();
     });
     ESP_LOGI(TAG, "Steering LED callback registered");
+
+    /* Zigbee 协调器网络组建成功 → 标记 Zigbee 就绪（与已配网共同决定常亮） */
+    zigbee_net_register_ready_cb([]() {
+        s_zigbee_ready = true;
+        status_led_refresh();
+    });
+    ESP_LOGI(TAG, "Zigbee network-ready callback registered");
 
     zboss_manager_start();
 
