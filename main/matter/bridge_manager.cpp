@@ -340,7 +340,7 @@ esp_err_t bridge_manager_create_devices_cb(esp_matter::endpoint_t *ep, uint32_t 
         break;
     }
     default:
-        ESP_LOGE(TAG, "Unsupported bridged matter device type: 0x%04x", device_type_id);
+        ESP_LOGE(TAG, "Unsupported bridged matter device type: 0x%04x", (unsigned int)device_type_id);
         return ESP_ERR_INVALID_ARG;
     }
     return ESP_OK;
@@ -449,6 +449,34 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
             zboss_manager_register_bridged_device(short_addr, endpoint);
         }
 
+        /* 兜底：若 device_info 残留但网内实际没有活着的 Matter 桥接端点
+         * （例如曾离网导致端点被销毁，而 device_info 因短地址过期未被清理），
+         * 直接走重连会导致永远没有 Matter 节点、HA 看不到。
+         * 这里检测到无端点就按新设备逻辑重建一个。 */
+        app_bridged_device_t *existing = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+        if (!existing) {
+            existing = app_bridge_get_device_by_zigbee_shortaddr(old_short_addr);
+        }
+        if (!existing) {
+            node_t *node = node::get();
+            if (node) {
+                uint16_t use_uiid = (info->uiid != UIID_UNKNOWN) ? info->uiid : uiid;
+                app_bridged_device_t *recreated =
+                    app_bridge_create_bridged_device(node, s_aggregator_ep_id,
+                                                     uiid_to_matter_device_type_id(use_uiid),
+                                                     ESP_MATTER_BRIDGED_DEVICE_TYPE_ZIGBEE,
+                                                     app_bridge_zigbee_address(endpoint, short_addr), NULL);
+                if (recreated) {
+                    zboss_manager_register_bridged_device(short_addr, endpoint);
+                    uint16_t matter_ep =
+                        app_bridge_get_matter_endpointid_by_zigbee_shortaddr(short_addr);
+                    device_info_set_matter_endpoint(device_id, matter_ep);
+                    ESP_LOGI(TAG, "Reallocated Matter endpoint for lingering device_id=0x%08X: Matter ep=%d",
+                             (unsigned int)device_id, matter_ep);
+                }
+            }
+        }
+
         if (info->uiid == UIID_UNKNOWN && uiid != UIID_UNKNOWN) {
             info->uiid = uiid;
         }
@@ -526,11 +554,6 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                                       esp_matter_attr_val_t *val,
                                       app_bridged_device_t *zigbee_device)
 {
-    /* 【调试】确认 HA 命令路径是否真的触发本回调，以及 zigbee_device 是否为 NULL */
-    ESP_LOGI(TAG, "[CB] attr_update: ep=%d cluster=0x%04x attr=0x%04x val_type=%d dev=%s",
-             endpoint_id, cluster_id, attribute_id,
-             val ? val->type : -1, zigbee_device ? "non-null" : "NULL");
-
     if (!zigbee_device || !zigbee_device->dev || !zigbee_device->dev->endpoint || !val) {
         ESP_LOGE(TAG, "Unable to update bridge device, ep=%" PRIu16 ", cluster=%" PRIu32 ", attr=%" PRIu32 "",
                  endpoint_id, cluster_id, attribute_id);

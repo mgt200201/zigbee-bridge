@@ -110,7 +110,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             (esp_zb_zdo_signal_leave_indication_params_t *)esp_zb_app_signal_get_params(p_sg_p);
         ESP_LOGI(TAG, "Device leaving (short: 0x%04hx, rejoin: %d)", leave->short_addr, leave->rejoin);
         if (!leave->rejoin) {
-            zdp_discovery_handle_device_leave(leave->short_addr);
+            zdp_discovery_handle_device_leave(leave->short_addr, leave->device_addr);
         }
         break;
     }

@@ -17,6 +17,9 @@ managed_components/
 .vscode/
 .idea/
 
+# Local agent skills (not part of the repo)
+.trae/
+
 # Python
 __pycache__/
 *.pyc

@@ -111,9 +111,14 @@ void zdp_discovery_send_register_status(uint16_t short_addr, uint8_t endpoint, u
  * 当收到 ESP_ZB_ZDO_SIGNAL_LEAVE_INDICATION 且 rejoin==0 时调用。
  * 负责清理 Matter 桥接设备、device_info 记录和 NVS 持久化数据。
  *
+ * 短地址（short_addr）会随重加入网而变化，因此必须同时传入 IEEE 地址。
+ * 删除 device_info 时优先按稳定的 IEEE 查找，避免因短地址过期导致
+ * device_info 残留、进而使下一次重入网误走"重连"路径而不重建 Matter 端点。
+ *
  * @param short_addr 离网设备短地址
+ * @param ieee 离网设备 IEEE 64 位地址（唯一且稳定）
  */
-void zdp_discovery_handle_device_leave(uint16_t short_addr);
+void zdp_discovery_handle_device_leave(uint16_t short_addr, const esp_zb_ieee_addr_t ieee);
 
 #ifdef __cplusplus
 }

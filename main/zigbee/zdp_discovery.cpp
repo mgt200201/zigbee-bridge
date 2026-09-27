@@ -687,7 +687,7 @@ void zdp_discovery_bind_light(uint16_t short_addr, uint8_t endpoint, esp_zb_ieee
 
 /* ==================== 设备离网清理 ==================== */
 
-void zdp_discovery_handle_device_leave(uint16_t short_addr)
+void zdp_discovery_handle_device_leave(uint16_t short_addr, const esp_zb_ieee_addr_t ieee)
 {
     ESP_LOGI(TAG, "Handling device leave: 0x%04x", short_addr);
 
@@ -698,8 +698,16 @@ void zdp_discovery_handle_device_leave(uint16_t short_addr)
         app_bridge_remove_device(bridged);
     }
 
-    /* 从 device_info 中删除（包括 NVS 持久化数据） */
-    device_info_t *info = device_info_find_by_short_addr(short_addr);
+    /* 从 device_info 中删除（包括 NVS 持久化数据）。
+     * 短地址会随重加入网变化，导致 NVS 里存的可能是过期值；
+     * 因此优先按稳定不变的 IEEE 查找，找不到再退回短地址。 */
+    device_info_t *info = NULL;
+    if (ieee) {
+        info = device_info_find_by_ieee(ieee);
+    }
+    if (!info) {
+        info = device_info_find_by_short_addr(short_addr);
+    }
     if (info && info->device_id != DEVICE_ID_UNKNOWN) {
         device_info_remove_by_device_id(info->device_id);
     }
