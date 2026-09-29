@@ -63,6 +63,7 @@
 #include "build_info.h"
 #include "self_test.h"
 #include "watchdog.h"
+#include "board_config.h"
 
 static const char *TAG = "app_main";
 
@@ -88,6 +89,12 @@ static volatile bool s_zigbee_ready        = false; /* Zigbee 协调器网络是
 static volatile bool s_confirmed_ready     = false; /* 已确认就绪（检测到活跃会话） */
 static bool s_poll_timer_started = false;
 static esp_timer_handle_t s_ready_poll_timer = NULL;
+
+/* 两颗独立 LED：
+ *  - s_status_led   : 状态灯（启动 100/400 闪烁，就绪常亮）
+ *  - s_steering_led : 入网闪烁灯（开放入网时 500ms 间隔闪烁） */
+static led_handle_t s_status_led   = NULL;
+static led_handle_t s_steering_led = NULL;]
 
 static void status_led_refresh(void);
 
@@ -118,16 +125,26 @@ static void ready_poll_cb(void *arg)
     }
 }
 
-/** 根据当前状态刷新 LED（优先级：入网 > 确认就绪 > 未就绪） */
+/** 根据当前状态刷新两颗 LED。
+ *  - 入网闪烁灯：开放入网时 500ms 闪烁，否则熄灭
+ *  - 状态灯：就绪常亮，未就绪 100ms 亮/400ms 灭 */
 static void status_led_refresh(void)
 {
-    if (s_steering_active) {
-        led_blink_start(500);            /* 入网指示优先 */
-    } else if (s_confirmed_ready) {
-        led_blink_stop();
-        led_on();                        /* 确认就绪常亮 */
-    } else {
-        led_blink_start_pattern(100, 400); /* 未就绪：100ms 亮/400ms 灭 */
+    if (s_steering_led) {
+        if (s_steering_active) {
+            led_blink_start(s_steering_led, STEERING_BLINK_MS);
+        } else {
+            led_blink_stop(s_steering_led);
+        }
+    }
+
+    if (s_status_led) {
+        if (s_confirmed_ready) {
+            led_blink_stop(s_status_led);
+            led_on(s_status_led);                       /* 就绪常亮 */
+        } else {
+            led_blink_start_pattern(s_status_led, LED_BOOT_ON_MS, LED_BOOT_OFF_MS);
+        }
     }
 }
 
@@ -290,9 +307,10 @@ extern "C" void app_main(void)
                  pin, disc);
     }
 
-    button_init(GPIO_NUM_9);
-    led_init(GPIO_NUM_10, false); /* active_low=false: 高电平点亮 */
-    status_led_refresh();         /* 刚上电：100ms 亮 / 400ms 灭（未就绪） */
+    button_init(BUTTON_GPIO);
+    s_status_led   = led_create(STATUS_LED_GPIO,   STATUS_LED_POLARITY);
+    s_steering_led = led_create(STEERING_LED_GPIO, STEERING_LED_POLARITY);
+    status_led_refresh();         /* 刚上电：状态灯 100ms 亮/400ms 灭 */
     ESP_LOGI(TAG, "Peripherals initialized");
 
     /* ---- 第 2 层：Matter 协议栈初始化 ---- */

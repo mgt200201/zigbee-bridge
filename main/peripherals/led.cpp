@@ -9,184 +9,202 @@
 #include "led.h"
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <stdlib.h>
 
 static const char *TAG = "led";
 
-/** LED GPIO */
-static gpio_num_t s_gpio = GPIO_NUM_NC;
-/** true = 低电平点亮 */
-static bool s_active_low = false;
-/** 闪烁定时器句柄 */
-static esp_timer_handle_t s_blink_timer = NULL;
-/** 当前是否点亮（逻辑状态，与 GPIO 实际电平可能相反） */
-static bool s_on = false;
-/** 当前是否在闪烁 */
-static bool s_blinking = false;
+/** 单颗 LED 状态 */
+struct led_ctx {
+    gpio_num_t gpio;           /**< LED GPIO */
+    bool active_low;           /**< true = 低电平点亮 */
+    bool on;                   /**< 逻辑点亮状态（与 GPIO 电平可能相反） */
+    bool blinking;             /**< 是否在闪烁 */
+    bool pattern_mode;         /**< true = 不对称 pattern 闪烁 */
+    uint32_t pattern_on_ms;    /**< pattern 点亮时长 */
+    uint32_t pattern_off_ms;   /**< pattern 熄灭时长 */
+    esp_timer_handle_t timer;  /**< 闪烁定时器 */
+};
+
+/** 将逻辑状态转换为 GPIO 电平 */
+static inline int logical_to_level(led_handle_t led, bool on)
+{
+    return led->active_low ? (on ? 0 : 1) : (on ? 1 : 0);
+}
+
+static void led_apply(led_handle_t led)
+{
+    gpio_set_level(led->gpio, logical_to_level(led, led->on));
+}
+
+void led_on(led_handle_t led)
+{
+    if (!led) {
+        return;
+    }
+    led->on = true;
+    led_apply(led);
+}
+
+void led_off(led_handle_t led)
+{
+    if (!led) {
+        return;
+    }
+    led->on = false;
+    led_apply(led);
+}
+
+void led_toggle(led_handle_t led)
+{
+    if (!led) {
+        return;
+    }
+    led->on = !led->on;
+    led_apply(led);
+}
 
 /**
- * @brief 将逻辑状态转换为 GPIO 电平
- */
-static inline int logical_to_level(bool on)
-{
-    return s_active_low ? (on ? 0 : 1) : (on ? 1 : 0);
-}
-
-void led_on(void)
-{
-    s_on = true;
-    gpio_set_level(s_gpio, logical_to_level(true));
-}
-
-void led_off(void)
-{
-    s_on = false;
-    gpio_set_level(s_gpio, logical_to_level(false));
-}
-
-void led_toggle(void)
-{
-    s_on = !s_on;
-    gpio_set_level(s_gpio, logical_to_level(s_on));
-}
-
-/**
- * @brief 闪烁定时器回调：每次触发翻转 LED 状态
+ * @brief 对称闪烁定时器回调：每次触发翻转 LED 状态
  */
 static void blink_timer_cb(void *arg)
 {
-    (void)arg;
-    led_toggle();
+    led_handle_t led = (led_handle_t)arg;
+    led_toggle(led);
 }
 
-esp_err_t led_init(gpio_num_t gpio, bool active_low)
+/**
+ * @brief pattern 定时器回调：单次触发，根据当前状态切换亮灭并重新武装
+ */
+static void pattern_timer_cb(void *arg)
 {
-    s_gpio = gpio;
-    s_active_low = active_low;
+    led_handle_t led = (led_handle_t)arg;
+    if (led->on) {
+        led_off(led);
+        if (led->pattern_off_ms > 0) {
+            esp_timer_start_once(led->timer, led->pattern_off_ms * 1000);
+        }
+    } else {
+        led_on(led);
+        if (led->pattern_on_ms > 0) {
+            esp_timer_start_once(led->timer, led->pattern_on_ms * 1000);
+        }
+    }
+}
 
-    /* 配置 LED GPIO 为推挽输出 */
-    gpio_config_t led_conf = {
+led_handle_t led_create(gpio_num_t gpio, bool active_low)
+{
+    led_handle_t led = (led_handle_t)calloc(1, sizeof(struct led_ctx));
+    if (!led) {
+        ESP_LOGE(TAG, "alloc failed");
+        return NULL;
+    }
+    led->gpio = gpio;
+    led->active_low = active_low;
+
+    gpio_config_t conf = {
         .pin_bit_mask = (1ULL << gpio),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    esp_err_t err = gpio_config(&led_conf);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "GPIO config failed: %s", esp_err_to_name(err));
-        return err;
+    if (gpio_config(&conf) != ESP_OK) {
+        ESP_LOGE(TAG, "GPIO config failed (gpio=%d)", gpio);
+        free(led);
+        return NULL;
     }
 
-    /* 初始熄灭 */
-    led_off();
-    ESP_LOGI(TAG, "LED initialized on GPIO%d, active_low=%d", gpio, active_low);
-    return ESP_OK;
+    led_off(led);
+    ESP_LOGI(TAG, "LED created on GPIO%d, active_low=%d", gpio, (int)active_low);
+    return led;
 }
 
-void led_blink_start(uint32_t interval_ms)
+void led_destroy(led_handle_t led)
 {
-    if (s_blink_timer) {
-        /* 如果已在闪烁，先停止再重新开始 */
-        led_blink_stop();
+    if (!led) {
+        return;
     }
+    led_blink_stop(led);
+    gpio_reset_pin(led->gpio);
+    free(led);
+}
 
-    const esp_timer_create_args_t timer_args = {
+void led_blink_start(led_handle_t led, uint32_t interval_ms)
+{
+    if (!led) {
+        return;
+    }
+    led_blink_stop(led);
+    led->pattern_mode = false;
+
+    const esp_timer_create_args_t args = {
         .callback = &blink_timer_cb,
-        .arg = NULL,
+        .arg = led,
         .dispatch_method = ESP_TIMER_TASK,
         .name = "led_blink",
         .skip_unhandled_events = true,
     };
-
-    esp_err_t err = esp_timer_create(&timer_args, &s_blink_timer);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Blink timer create failed: %s", esp_err_to_name(err));
+    if (esp_timer_create(&args, &led->timer) != ESP_OK) {
+        ESP_LOGE(TAG, "Blink timer create failed");
         return;
     }
-
-    err = esp_timer_start_periodic(s_blink_timer, interval_ms * 1000);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Blink timer start failed: %s", esp_err_to_name(err));
+    if (esp_timer_start_periodic(led->timer, interval_ms * 1000) != ESP_OK) {
+        ESP_LOGE(TAG, "Blink timer start failed");
         return;
     }
-
-    s_blinking = true;
-    ESP_LOGI(TAG, "LED blink started, interval=%u ms", interval_ms);
+    led->blinking = true;
+    ESP_LOGI(TAG, "LED blink started, interval=%u ms", (unsigned int)interval_ms);
 }
 
-void led_blink_stop(void)
+void led_blink_start_pattern(led_handle_t led, uint32_t on_ms, uint32_t off_ms)
 {
-    if (s_blink_timer) {
-        esp_timer_stop(s_blink_timer);
-        esp_timer_delete(s_blink_timer);
-        s_blink_timer = NULL;
+    if (!led) {
+        return;
     }
-    s_blinking = false;
-    led_off();
-}
+    led_blink_stop(led);
+    led->pattern_mode = true;
+    led->pattern_on_ms = on_ms;
+    led->pattern_off_ms = off_ms;
 
-bool led_is_blinking(void)
-{
-    return s_blinking;
-}
-
-/* ---- 不对称(亮/灭不同时长)闪烁 ---- */
-
-/** 当前 pattern 模式的亮/灭时长 */
-static uint32_t s_pattern_on_ms = 100;
-static uint32_t s_pattern_off_ms = 400;
-
-/**
- * @brief pattern 定时器回调：单次触发，根据当前逻辑状态切换亮灭并重新武装
- */
-static void pattern_timer_cb(void *arg)
-{
-    (void)arg;
-    if (s_on) {
-        led_off();
-        if (s_pattern_off_ms > 0) {
-            esp_timer_start_once(s_blink_timer, s_pattern_off_ms * 1000);
-        }
-    } else {
-        led_on();
-        if (s_pattern_on_ms > 0) {
-            esp_timer_start_once(s_blink_timer, s_pattern_on_ms * 1000);
-        }
-    }
-}
-
-void led_blink_start_pattern(uint32_t on_ms, uint32_t off_ms)
-{
-    if (s_blink_timer) {
-        /* 如果已在闪烁，先停止再重新开始 */
-        led_blink_stop();
-    }
-
-    s_pattern_on_ms = on_ms;
-    s_pattern_off_ms = off_ms;
-
-    const esp_timer_create_args_t timer_args = {
+    const esp_timer_create_args_t args = {
         .callback = &pattern_timer_cb,
-        .arg = NULL,
+        .arg = led,
         .dispatch_method = ESP_TIMER_TASK,
         .name = "led_blink_pattern",
         .skip_unhandled_events = true,
     };
-
-    esp_err_t err = esp_timer_create(&timer_args, &s_blink_timer);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Pattern timer create failed: %s", esp_err_to_name(err));
+    if (esp_timer_create(&args, &led->timer) != ESP_OK) {
+        ESP_LOGE(TAG, "Pattern timer create failed");
         return;
     }
 
-    /* 先点亮，on_ms 后进入灭→亮循环 */
-    led_on();
-    err = esp_timer_start_once(s_blink_timer, on_ms * 1000);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Pattern timer start failed: %s", esp_err_to_name(err));
+    /* 先点亮，on_ms 后进入 灭→亮 循环 */
+    led_on(led);
+    if (esp_timer_start_once(led->timer, on_ms * 1000) != ESP_OK) {
+        ESP_LOGE(TAG, "Pattern timer start failed");
         return;
     }
+    led->blinking = true;
+    ESP_LOGI(TAG, "LED pattern started: on=%u ms, off=%u ms",
+             (unsigned int)on_ms, (unsigned int)off_ms);
+}
 
-    s_blinking = true;
-    ESP_LOGI(TAG, "LED pattern started: on=%u ms, off=%u ms", on_ms, off_ms);
+void led_blink_stop(led_handle_t led)
+{
+    if (!led) {
+        return;
+    }
+    if (led->timer) {
+        esp_timer_stop(led->timer);
+        esp_timer_delete(led->timer);
+        led->timer = NULL;
+    }
+    led->blinking = false;
+    led->pattern_mode = false;
+    led_off(led);
+}
+
+bool led_is_blinking(led_handle_t led)
+{
+    return led ? led->blinking : false;
 }

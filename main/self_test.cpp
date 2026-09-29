@@ -15,6 +15,7 @@
 #include "self_test.h"
 #include <esp_log.h>
 #include <driver/gpio.h>
+#include "board_config.h"
 
 static const char *TAG = "self_test";
 
@@ -61,17 +62,17 @@ esp_err_t self_test_hardware(void)
 
     esp_err_t result = ESP_OK;
 
-    /* LED 检测 (GPIO_10) */
-    if (gpio_toggle_test(GPIO_NUM_10, "LED") != ESP_OK) {
+    /* LED 检测 (status LED) */
+    if (gpio_toggle_test(STATUS_LED_GPIO, "LED") != ESP_OK) {
         result = ESP_ERR_INVALID_STATE;
     }
 
     /* 按键检测：只检测 GPIO 是否可读，不模拟按下 */
-    gpio_set_direction(GPIO_NUM_9, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(GPIO_NUM_9, GPIO_PULLUP_ONLY);
-    int btn_level = gpio_get_level(GPIO_NUM_9);
-    ESP_LOGD(TAG, "  [INFO] Button (GPIO_9): level=%d (1=released with pullup)", btn_level);
-    gpio_reset_pin(GPIO_NUM_9);
+    gpio_set_direction(BUTTON_GPIO, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(BUTTON_GPIO, GPIO_PULLUP_ONLY);
+    int btn_level = gpio_get_level(BUTTON_GPIO);
+    ESP_LOGD(TAG, "  [INFO] Button (GPIO_%d): level=%d (1=released with pullup)", BUTTON_GPIO, btn_level);
+    gpio_reset_pin(BUTTON_GPIO);
 
     ESP_LOGI(TAG, "╚══════════════════════════════════════╝");
     return result;
