@@ -382,6 +382,20 @@ int device_info_get_count(void)
     return count;
 }
 
+void device_info_clear_all(void)
+{
+    MutexGuard guard;
+    memset(s_device_infos, 0, sizeof(s_device_infos));
+    nvs_handle_t handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+        return;
+    }
+    nvs_erase_all(handle);
+    nvs_commit(handle);
+    nvs_close(handle);
+    ESP_LOGI(TAG, "Cleared device_db NVS and RAM table");
+}
+
 device_info_t *device_info_get_by_index(int index)
 {
     MutexGuard guard;

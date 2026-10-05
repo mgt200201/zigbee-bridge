@@ -29,6 +29,25 @@ menu "ESP Matter Zigbee Bridge Example"
             default 18 if ESP_MATTER_ZIGBEE_BRIDGE_BOARD_DEV_KIT
             default 5  if ESP_MATTER_ZIGBEE_BRIDGE_BOARD_STANDALONE
 
+        config PIN_TO_RCP_RESET
+            int "GPIO to ESP32-H2 EN / RESET (for RCP OTA)"
+            default 46
+            help
+                S3 GPIO wired to H2 EN. Held HIGH in normal operation so H2 runs.
+                During RCP OTA, serial-flasher pulses this pin (with BOOT held low)
+                to enter UART download mode.
+                NOTE: ESP32-S3 GPIO46 is a strapping pin and may be input-only on
+                some silicon; if H2 never resets for OTA, move EN to an output-
+                capable GPIO (e.g. 6/7/8/9/10).
+
+        config PIN_TO_RCP_BOOT
+            int "GPIO to ESP32-H2 BOOT / IO9 (for RCP OTA)"
+            default 3
+            help
+                S3 GPIO wired to H2 BOOT (GPIO9 strapping). Held HIGH in normal
+                operation. During RCP OTA, serial-flasher holds this pin LOW while
+                pulsing EN so H2 enters UART download mode.
+
     endmenu
 
     menu "Zigbee Gateway Configuration"
@@ -120,6 +139,27 @@ menu "ESP Matter Zigbee Bridge Example"
             help
                 PEM-encoded server certificate for TLS verification.
                 Leave empty to disable TLS verification (development only).
+
+        config GATEWAY_RCP_OTA
+            bool "Flash official ESP32-H2 RCP during Matter OTA"
+            default y
+            help
+                Matter OTA payload is a combined image: H2 ot_rcp (bootloader +
+                partition + app) followed by the S3 gateway firmware. During
+                download the S3 pauses Zigbee UART, serial-flashes the H2, then
+                writes its own image to the inactive ota_0/ota_1 slot.
+                Requires PIN_TO_RCP_RESET and PIN_TO_RCP_BOOT wired.
+                Host-only zigbee_bridge.bin still works if the payload starts
+                with an ESP image magic (0xE9).
+
+        config RCP_OTA_BUILD_DIR
+            depends on GATEWAY_RCP_OTA
+            string "Prebuilt official ot_rcp build directory"
+            default "$(IDF_PATH)/examples/openthread/ot_rcp/build"
+            help
+                Directory that contains esp_ot_rcp.bin, bootloader/bootloader.bin,
+                partition_table/partition-table.bin, flash_args and rcp_version.
+                Build ot_rcp for esp32h2 with OPENTHREAD_NCP_VENDOR_HOOK first.
     endmenu
 
 endmenu

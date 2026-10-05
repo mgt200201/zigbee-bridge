@@ -14,10 +14,15 @@
 #include <stdbool.h>
 #include <zcl/esp_zigbee_zcl_command.h>
 #include <zcl/esp_zigbee_zcl_basic.h>
+#include <zdo/esp_zigbee_zdo_command.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+void zdp_discovery_on_simple_desc(esp_zb_zdp_status_t zdo_status,
+                                  esp_zb_af_simple_desc_1_1_t *simple_desc,
+                                  void *user_ctx);
 
 /**
  * @brief 初始化设备发现模块

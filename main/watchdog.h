@@ -28,6 +28,7 @@
 #pragma once
 
 #include <esp_err.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,6 +73,13 @@ esp_err_t watchdog_remove_self(void);
  * @return ESP_OK 成功
  */
 esp_err_t watchdog_feed(void);
+
+/**
+ * 无法在阻塞等待中喂狗时（serial-flasher sync），先退订当前任务，结束后再订回去。
+ * 返回退订前是否在 TWDT 上。
+ */
+bool watchdog_pause_self(void);
+void watchdog_resume_self(bool paused);
 
 #ifdef __cplusplus
 }

@@ -89,5 +89,28 @@ esp_err_t watchdog_feed(void)
     if (!s_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
+    /* Reset only if THIS task is subscribed; otherwise IDF logs "task not found". */
+    if (esp_task_wdt_status(NULL) != ESP_OK) {
+        return ESP_ERR_INVALID_STATE;
+    }
     return esp_task_wdt_reset();
+}
+
+bool watchdog_pause_self(void)
+{
+    if (!s_initialized) {
+        return false;
+    }
+    if (esp_task_wdt_status(NULL) != ESP_OK) {
+        return false;
+    }
+    (void)watchdog_remove_self();
+    return true;
+}
+
+void watchdog_resume_self(bool paused)
+{
+    if (paused) {
+        (void)watchdog_add_self();
+    }
 }

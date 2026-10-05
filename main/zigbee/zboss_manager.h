@@ -64,6 +64,13 @@ typedef zigbee_net_steering_cb_t steering_state_callback_t;
 void zboss_manager_start(void);
 void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct);
 
+/**
+ * Pause the Zigbee task and uninstall UART1 so serial-flasher can own the
+ * H2 UART for RCP firmware download. The gateway reboots after Matter OTA,
+ * so this is not resumed in place.
+ */
+esp_err_t zboss_manager_pause_for_rcp_flash(void);
+
 /* ==================== 网络管理（thin wrapper → zigbee_network） ==================== */
 
 static inline bool zboss_manager_is_network_formed(void)

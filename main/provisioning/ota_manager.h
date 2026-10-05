@@ -34,10 +34,11 @@ extern "C" {
 #endif
 
 /**
- * @brief 初始化 OTA 管理器
+ * @brief 初始化 HTTPS OTA 管理器（开发备用路径）
  *
- * 注册 Matter OTA Provider 回调（若启用），初始化 HTTPS 证书。
- * 在 Matter 协议栈启动后、WiFi 连接后调用。
+ * 网关自身的正式升级走 Matter OTA Requestor（见 matter_ota.h）。
+ * 本模块只从 CONFIG_OTA_FW_UPGRADE_URL 拉普通 bin，不走 Matter。
+ * 在 WiFi 可用之后调用。自动检查默认关闭，避免和 Matter OTA 抢分区。
  *
  * @return ESP_OK 成功，其它值失败
  */

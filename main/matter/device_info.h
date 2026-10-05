@@ -179,6 +179,9 @@ int device_info_get_online_count(void);
  */
 int device_info_get_count(void);
 
+/** Erase RAM table and NVS namespace device_db. */
+void device_info_clear_all(void);
+
 /**
  * @brief 根据索引获取设备信息
  * @param index 索引（0 ~ get_count()-1）

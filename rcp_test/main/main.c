@@ -21,7 +21,7 @@ static const char *TAG = "rcp_test";
 #define RCP_UART_PORT      UART_NUM_1
 #define RCP_UART_BAUDRATE  460800
 
-#define MAX_CHILDREN                10
+#define MAX_CHILDREN                32
 #define ESP_ZB_PRIMARY_CHANNEL_MASK (1l << 13)
 
 /* RCP 测试结果标志 */

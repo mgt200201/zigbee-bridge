@@ -24,6 +24,7 @@
 #include "zboss_manager.h"
 #include "bridge_manager.h"
 #include "zdp_discovery.h"
+#include "zb_tx_queue.h"
 #include "watchdog.h"
 #include <esp_log.h>
 #include <esp_system.h>
@@ -32,10 +33,13 @@
 #include <ha/esp_zigbee_ha_standard.h>
 #include <driver/uart.h>
 #include <driver/gpio.h>
+#include <esp_private/esp_gpio_reserve.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <soc/gpio_num.h>
 
 static const char *TAG = "zboss_mgr";
+static TaskHandle_t s_zboss_task = NULL;
 
 /* ==================== ZBOSS 信号处理 ==================== */
 
@@ -142,6 +146,7 @@ static void zboss_task(void *pvParameters)
     esp_zb_overall_network_size_set(32);
 
     esp_zb_init(&zb_nwk_cfg);
+    zb_tx_init();
 
     /* 栈就绪：此后 Matter 下行属性更新才允许发送 Zigbee 命令 */
     bridge_manager_set_zb_stack_ready(true);
@@ -196,8 +201,35 @@ void zboss_manager_start(void)
         },
     };
     ESP_ERROR_CHECK(esp_zb_platform_config(&config));
-    xTaskCreate(zboss_task, "zboss_main", 10240, NULL, 5, NULL);
+    xTaskCreate(zboss_task, "zboss_main", 10240, NULL, 5, &s_zboss_task);
 
     zigbee_net_init_timer();
     ESP_LOGI(TAG, "ZBOSS manager started");
+}
+
+esp_err_t zboss_manager_pause_for_rcp_flash(void)
+{
+    if (s_zboss_task != NULL) {
+        vTaskSuspend(s_zboss_task);
+        ESP_LOGW(TAG, "Zigbee task suspended for RCP serial flash");
+    }
+    zb_tx_pause();
+
+    /* Drain then drop UART1 so serial-flasher can claim the same pins.
+     * uart_driver_delete() does not revoke GPIO reservation; without reset+revoke
+     * uart_set_pin() logs "GPIO 5 is not usable" and H2 never sees download sync. */
+    (void)uart_wait_tx_done(UART_NUM_1, pdMS_TO_TICKS(50));
+    esp_err_t err = uart_driver_delete(UART_NUM_1);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_ARG && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "uart_driver_delete: %s", esp_err_to_name(err));
+    }
+
+    const gpio_num_t rx = (gpio_num_t)CONFIG_PIN_TO_RCP_TX;
+    const gpio_num_t tx = (gpio_num_t)CONFIG_PIN_TO_RCP_RX;
+    gpio_reset_pin(rx);
+    gpio_reset_pin(tx);
+    esp_gpio_revoke((1ULL << rx) | (1ULL << tx));
+    vTaskDelay(pdMS_TO_TICKS(20));
+    ESP_LOGI(TAG, "UART1 released (S3 RX=GPIO%d TX=GPIO%d)", (int)rx, (int)tx);
+    return ESP_OK;
 }

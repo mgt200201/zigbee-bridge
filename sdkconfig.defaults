@@ -1,4 +1,4 @@
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
 # Enable BT
 CONFIG_BT_ENABLED=y
@@ -66,6 +66,21 @@ CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=32
 # Use custom Device Instance Info Provider so the Basic Information cluster
 # vendor name (manufacturer shown in HA) can be set to "XiaoNian"
 CONFIG_CUSTOM_DEVICE_INSTANCE_INFO_PROVIDER=y
+
+# Matter OTA Requestor: the gateway updates itself.
+# A/B slots are ota_0/ota_1. Rollback boots the previous slot if the new
+# image never marks itself valid. CHIP_OTA_IMAGE_BUILD emits <project>-ota.bin.
+CONFIG_ENABLE_OTA_REQUESTOR=y
+CONFIG_OTA_AUTO_REBOOT_ON_APPLY=y
+CONFIG_CHIP_OTA_IMAGE_BUILD=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_GATEWAY_RCP_OTA=y
+
+# S3 → H2 control: IO3=BOOT, IO46=EN (hold high when H2 should run)
+CONFIG_PIN_TO_RCP_BOOT=3
+CONFIG_PIN_TO_RCP_RESET=46
+CONFIG_SERIAL_FLASHER_RESET_HOLD_TIME_MS=300
+CONFIG_SERIAL_FLASHER_BOOT_HOLD_TIME_MS=400
 
 # Use IDF mDNS instead of CHIP's minimal mDNS
 # Minimal mDNS cannot fragment UDP broadcast packets,

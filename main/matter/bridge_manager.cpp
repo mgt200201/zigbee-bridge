@@ -27,6 +27,7 @@
 #include <zboss_manager.h>
 #include <zdp_discovery.h>
 #include <zcl_bridge_api.h>
+#include <zb_tx_queue.h>
 #include <matter/app_status.h>
 #include <wifi_manager.h>
 #include <esp_check.h>
@@ -50,6 +51,9 @@ using namespace esp_matter::cluster;
 
 /** Aggregator 端点 ID */
 static uint16_t s_aggregator_ep_id = chip::kInvalidEndpointId;
+
+/* Zigbee 栈就绪标志：esp_zb_init() 之前为 false。 */
+static volatile bool s_zb_stack_ready = false;
 
 /* ---- 下行颜色配对影子状态（按 Matter 端点索引） ----
  * Matter 控制器一次只写一个颜色属性（如 CurrentX），而 Zigbee 命令需要成对值
@@ -341,7 +345,7 @@ esp_err_t bridge_manager_create_devices_cb(esp_matter::endpoint_t *ep, uint32_t 
     }
     default:
         ESP_LOGE(TAG, "Unsupported bridged matter device type: 0x%04x", (unsigned int)device_type_id);
-        return ESP_ERR_INVALID_ARG;
+            return ESP_ERR_INVALID_ARG;
     }
     return ESP_OK;
 }
@@ -360,10 +364,6 @@ esp_err_t bridge_manager_attr_update_cb(esp_matter::attribute::callback_type_t t
 }
 
 /* ==================== 桥接设备查询 ==================== */
-
-/* Zigbee 栈就绪标志：esp_zb_init() 之前为 false。
- * 未就绪时禁止下发 Zigbee 命令（ZBOSS bufpool 尚未分配，调用会崩溃）。 */
-static volatile bool s_zb_stack_ready = false;
 
 void bridge_manager_set_zb_stack_ready(bool ready)
 {
@@ -580,35 +580,13 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
 
     case OnOff::Id:
         if (attribute_id == OnOff::Attributes::OnOff::Id) {
-            bool on = val->val.b;
-            esp_zb_zcl_on_off_cmd_t cmd = {
-                .zcl_basic_cmd = {
-                    .dst_addr_u   = { .addr_short = zshort },
-                    .dst_endpoint = zep,
-                    .src_endpoint = HA_GW_ENDPOINT,
-                },
-                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-                .on_off_cmd_id = static_cast<uint8_t>(on ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID),
-            };
-            uint8_t seq = esp_zb_zcl_on_off_cmd_req(&cmd);
-            ESP_LOGI(TAG, "On/Off=%s sent to 0x%04x ep=%d (seq=%u)", on ? "ON" : "OFF", zshort, zep, seq);
+            zb_tx_on_off(zshort, zep, val->val.b);
         }
         break;
 
     case LevelControl::Id:
         if (attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
-            esp_zb_zcl_move_to_level_cmd_t cmd = {
-                .zcl_basic_cmd = {
-                    .dst_addr_u   = { .addr_short = zshort },
-                    .dst_endpoint = zep,
-                    .src_endpoint = HA_GW_ENDPOINT,
-                },
-                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-                .level = val->val.u8,
-                .transition_time = 0,
-            };
-            uint8_t seq = esp_zb_zcl_level_move_to_level_cmd_req(&cmd);
-            ESP_LOGI(TAG, "MoveToLevel=%u sent to 0x%04x ep=%d (seq=%u)", cmd.level, zshort, zep, seq);
+            zb_tx_move_to_level(zshort, zep, val->val.u8);
         }
         break;
 
@@ -625,22 +603,7 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                 ESP_LOGI(TAG, "CurrentX=%u cached (Y not set yet), ep=%d", shadow->x, endpoint_id);
                 break;
             }
-            esp_zb_zcl_color_move_to_color_cmd_t cmd = {
-                .zcl_basic_cmd = {
-                    .dst_addr_u   = { .addr_short = zshort },
-                    .dst_endpoint = zep,
-                    .src_endpoint = HA_GW_ENDPOINT,
-                },
-                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-                .color_x = shadow->x,
-                .color_y = shadow->y,
-                .transition_time = 0,
-            };
-            uint8_t seq = esp_zb_zcl_color_move_to_color_cmd_req(&cmd);
-            ESP_LOGI(TAG, "MoveToColor(x=%u,y=%u) sent to 0x%04x ep=%d (seq=%u)",
-                     cmd.color_x, cmd.color_y, zshort, zep, seq);
-            /* 发送后清零配对标志：下一轮必须等全新的 X+Y，避免用上一轮残留的旧值
-             * 先发出一条错误的中间命令，导致灯先闪到错误颜色再修正 */
+            zb_tx_move_to_color(zshort, zep, shadow->x, shadow->y);
             shadow->have_x = false;
             shadow->have_y = false;
         } else if (attribute_id == ColorControl::Attributes::CurrentY::Id) {
@@ -650,20 +613,7 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                 ESP_LOGI(TAG, "CurrentY=%u cached (X not set yet), ep=%d", shadow->y, endpoint_id);
                 break;
             }
-            esp_zb_zcl_color_move_to_color_cmd_t cmd = {
-                .zcl_basic_cmd = {
-                    .dst_addr_u   = { .addr_short = zshort },
-                    .dst_endpoint = zep,
-                    .src_endpoint = HA_GW_ENDPOINT,
-                },
-                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-                .color_x = shadow->x,
-                .color_y = shadow->y,
-                .transition_time = 0,
-            };
-            uint8_t seq = esp_zb_zcl_color_move_to_color_cmd_req(&cmd);
-            ESP_LOGI(TAG, "MoveToColor(x=%u,y=%u) sent to 0x%04x ep=%d (seq=%u)",
-                     cmd.color_x, cmd.color_y, zshort, zep, seq);
+            zb_tx_move_to_color(zshort, zep, shadow->x, shadow->y);
             shadow->have_x = false;
             shadow->have_y = false;
         } else if (attribute_id == ColorControl::Attributes::CurrentHue::Id) {
@@ -673,22 +623,7 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                 ESP_LOGI(TAG, "CurrentHue=%u cached (Sat not set yet), ep=%d", shadow->hue, endpoint_id);
                 break;
             }
-            esp_zb_color_move_to_hue_saturation_cmd_t cmd = {
-                .zcl_basic_cmd = {
-                    .dst_addr_u   = { .addr_short = zshort },
-                    .dst_endpoint = zep,
-                    .src_endpoint = HA_GW_ENDPOINT,
-                },
-                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-                .hue = shadow->hue,
-                .saturation = shadow->sat,
-                .transition_time = 0,
-            };
-            uint8_t seq = esp_zb_zcl_color_move_to_hue_and_saturation_cmd_req(&cmd);
-            ESP_LOGI(TAG, "MoveToHueSat(h=%u,s=%u) sent to 0x%04x ep=%d (seq=%u)",
-                     cmd.hue, cmd.saturation, zshort, zep, seq);
-            /* 发送后清零配对标志：下一轮必须等全新的 H+S，避免用上一轮残留的旧值
-             * 先发出一条错误的中间命令，导致灯先闪到错误颜色再修正 */
+            zb_tx_move_to_hue_sat(zshort, zep, shadow->hue, shadow->sat);
             shadow->have_hue = false;
             shadow->have_sat = false;
         } else if (attribute_id == ColorControl::Attributes::CurrentSaturation::Id) {
@@ -698,38 +633,11 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                 ESP_LOGI(TAG, "CurrentSat=%u cached (Hue not set yet), ep=%d", shadow->sat, endpoint_id);
                 break;
             }
-            esp_zb_color_move_to_hue_saturation_cmd_t cmd = {
-                .zcl_basic_cmd = {
-                    .dst_addr_u   = { .addr_short = zshort },
-                    .dst_endpoint = zep,
-                    .src_endpoint = HA_GW_ENDPOINT,
-                },
-                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-                .hue = shadow->hue,
-                .saturation = shadow->sat,
-                .transition_time = 0,
-            };
-            uint8_t seq = esp_zb_zcl_color_move_to_hue_and_saturation_cmd_req(&cmd);
-            ESP_LOGI(TAG, "MoveToHueSat(h=%u,s=%u) sent to 0x%04x ep=%d (seq=%u)",
-                     cmd.hue, cmd.saturation, zshort, zep, seq);
+            zb_tx_move_to_hue_sat(zshort, zep, shadow->hue, shadow->sat);
             shadow->have_hue = false;
             shadow->have_sat = false;
         } else if (attribute_id == ColorControl::Attributes::ColorTemperatureMireds::Id) {
-            /* 色温下走：HA 的 MoveToColorTemperature 命令会更新 ColorTemperatureMireds 属性，
-             * 这里把它转发成 Zigbee 的 MoveToColorTemperature（color_temperature 单位同为 mireds） */
-            esp_zb_zcl_color_move_to_color_temperature_cmd_t cmd = {
-                .zcl_basic_cmd = {
-                    .dst_addr_u   = { .addr_short = zshort },
-                    .dst_endpoint = zep,
-                    .src_endpoint = HA_GW_ENDPOINT,
-                },
-                .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-                .color_temperature = val->val.u16,
-                .transition_time = 0,
-            };
-            uint8_t seq = esp_zb_zcl_color_move_to_color_temperature_cmd_req(&cmd);
-            ESP_LOGI(TAG, "MoveToColorTemp(mireds=%u) sent to 0x%04x ep=%d (seq=%u)",
-                     cmd.color_temperature, zshort, zep, seq);
+            zb_tx_move_to_color_temp(zshort, zep, val->val.u16);
         }
         break;
     }

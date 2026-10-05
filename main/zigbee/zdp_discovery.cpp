@@ -24,6 +24,7 @@
  */
 
 #include "zdp_discovery.h"
+#include "zb_tx_queue.h"
 #include "zcl_handler_registry.h"
 #include "zcl_metrics.h"
 #include <zboss_manager.h>
@@ -93,9 +94,6 @@ static bool s_first_join_pending = false;
 
 /* ==================== 内部函数声明 ==================== */
 static void discover_device_cb(uint8_t param);
-static void simple_desc_cb(esp_zb_zdp_status_t zdo_status,
-                           esp_zb_af_simple_desc_1_1_t *simple_desc,
-                           void *user_ctx);
 static void probe_next_endpoint(uint16_t short_addr, uint8_t next_ep);
 static void retry_probe_cb(uint8_t param);
 static void discover_done_cb(uint8_t param);
@@ -106,9 +104,9 @@ static esp_err_t zb_read_attr_resp_handler(
 
 /* ==================== Simple Descriptor 响应 ==================== */
 
-static void simple_desc_cb(esp_zb_zdp_status_t zdo_status,
-                           esp_zb_af_simple_desc_1_1_t *simple_desc,
-                           void *user_ctx)
+void zdp_discovery_on_simple_desc(esp_zb_zdp_status_t zdo_status,
+                                  esp_zb_af_simple_desc_1_1_t *simple_desc,
+                                  void *user_ctx)
 {
     uint16_t addr = (uint16_t)(uintptr_t)user_ctx;
 
@@ -160,13 +158,7 @@ static void probe_next_endpoint(uint16_t short_addr, uint8_t next_ep)
     }
 
     ESP_LOGI(TAG, "Probing endpoint %d of device 0x%04x...", next_ep, short_addr);
-
-    esp_zb_zdo_simple_desc_req_param_t req;
-    req.addr_of_interest = short_addr;
-    req.endpoint = next_ep;
-    esp_zb_zdo_simple_desc_req(&req, simple_desc_cb, (void *)(uintptr_t)short_addr);
-
-    /* 立即探测下一个端点（协议栈会自动排队） */
+    zb_tx_simple_desc(short_addr, next_ep);
     probe_next_endpoint(short_addr, next_ep + 1);
 }
 
@@ -462,33 +454,7 @@ void zdp_discovery_send_register_status(uint16_t short_addr, uint8_t endpoint, u
 {
     ESP_LOGI(TAG, "Send register_status=%u to 0x%04x ep=%d (cluster=0xFC11, attr=0x1FFF)",
              status, short_addr, endpoint);
-
-    static uint16_t s_status_value;
-    s_status_value = status;
-
-    esp_zb_zcl_attribute_t attr = {
-        .id   = 0x1FFF,
-        .data = {
-            .type  = ESP_ZB_ZCL_ATTR_TYPE_U16,
-            .size  = sizeof(uint16_t),
-            .value = &s_status_value,
-        },
-    };
-
-    esp_zb_zcl_write_attr_cmd_t cmd_req = {
-        .zcl_basic_cmd = {
-            .dst_addr_u   = { .addr_short = short_addr },
-            .dst_endpoint = endpoint,
-            .src_endpoint = HA_GW_ENDPOINT,
-        },
-        .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-        .clusterID    = 0xFC11,
-        .attr_number  = 1,
-        .attr_field   = &attr,
-    };
-    cmd_req.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
-
-    esp_zb_zcl_write_attr_cmd_req(&cmd_req);
+    zb_tx_write_u16(short_addr, endpoint, 0xFC11, 0x1FFF, status);
 }
 
 /* ==================== 温湿度传感器上报配置 ==================== */
@@ -501,55 +467,27 @@ void zdp_discovery_send_register_status(uint16_t short_addr, uint8_t endpoint, u
 
 static void send_config_report(uint16_t short_addr, uint8_t endpoint,
                                uint16_t cluster_id, uint16_t attr_id,
-                               uint8_t attr_type, void *reportable_change,
+                               uint8_t attr_type, uint16_t reportable_change,
                                uint16_t min_interval, uint16_t max_interval)
 {
-    esp_zb_zcl_config_report_record_t record;
-    memset(&record, 0, sizeof(record));
-    record.direction = ESP_ZB_ZCL_REPORT_DIRECTION_SEND;
-    record.attributeID = attr_id;
-    record.attrType = attr_type;
-    record.min_interval = min_interval;
-    record.max_interval = max_interval;
-    record.reportable_change = reportable_change;
-
-    esp_zb_zcl_config_report_cmd_t cmd;
-    memset(&cmd, 0, sizeof(cmd));
-    cmd.zcl_basic_cmd.dst_addr_u.addr_short = short_addr;
-    cmd.zcl_basic_cmd.dst_endpoint = endpoint;
-    cmd.zcl_basic_cmd.src_endpoint = HA_GW_ENDPOINT;
-    cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-    cmd.clusterID = cluster_id;
-    cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
-    cmd.record_number = 1;
-    cmd.record_field = &record;
-
-    uint8_t seq = esp_zb_zcl_config_report_cmd_req(&cmd);
-    ESP_LOGI(TAG, "Configure report 0x%04x ep=%d cluster=0x%04x attr=0x%04x "
-             "(min=%ds max=%ds), seq=%u",
-             short_addr, endpoint, cluster_id, attr_id,
-             min_interval, max_interval, seq);
+    zb_tx_config_report(short_addr, endpoint, cluster_id, attr_id, attr_type,
+                        reportable_change, min_interval, max_interval);
 }
 
 void zdp_discovery_configure_reporting(uint16_t short_addr, uint8_t endpoint)
 {
     ESP_LOGI(TAG, "Configuring reporting for TH sensor 0x%04x ep=%d", short_addr, endpoint);
 
-    static int16_t s_temp_change = TH_REPORT_TEMP_CHANGE;
-    static uint16_t s_humidity_change = TH_REPORT_HUMIDITY_CHANGE;
-
-    /* 温度 MeasuredValue (0x0402/0x0000, int16, 0.01°C) */
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
                        ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
-                       ESP_ZB_ZCL_ATTR_TYPE_S16, &s_temp_change,
+                       ESP_ZB_ZCL_ATTR_TYPE_S16, TH_REPORT_TEMP_CHANGE,
                        TH_REPORT_MIN_INTERVAL, TH_REPORT_MAX_INTERVAL);
 
-    /* 湿度 MeasuredValue (0x0405/0x0000, uint16, 0.01%) */
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
                        ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
-                       ESP_ZB_ZCL_ATTR_TYPE_U16, &s_humidity_change,
+                       ESP_ZB_ZCL_ATTR_TYPE_U16, TH_REPORT_HUMIDITY_CHANGE,
                        TH_REPORT_MIN_INTERVAL, TH_REPORT_MAX_INTERVAL);
 }
 
@@ -575,113 +513,61 @@ void zdp_discovery_configure_color_reporting(uint16_t short_addr, uint8_t endpoi
 {
     ESP_LOGI(TAG, "Configuring reporting for RGB-light 0x%04x ep=%d", short_addr, endpoint);
 
-    static uint8_t  s_onoff_change     = 0;            /* bool，无阈值 */
-    static uint8_t  s_level_change     = LIGHT_CHANGE_U8;
-    static uint8_t  s_hue_change       = LIGHT_CHANGE_U8;
-    static uint8_t  s_sat_change       = LIGHT_CHANGE_U8;
-    static uint16_t s_x_change         = LIGHT_CHANGE_U16;
-    static uint16_t s_y_change         = LIGHT_CHANGE_U16;
-    static uint8_t  s_colormode_change = 0;            /* enum，无阈值 */
-    static uint16_t s_ct_change        = LIGHT_CHANGE_U16;
-
-    /* 开关状态 OnOff (0x0006/0x0000, bool) */
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
                        ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID,
-                       ESP_ZB_ZCL_ATTR_TYPE_BOOL, &s_onoff_change,
+                       ESP_ZB_ZCL_ATTR_TYPE_BOOL, 0,
                        LIGHT_REPORT_MIN_INTERVAL, LIGHT_REPORT_MAX_INTERVAL);
-
-    /* 亮度 CurrentLevel (0x0008/0x0000, u8) */
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
                        ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID,
-                       ESP_ZB_ZCL_ATTR_TYPE_U8, &s_level_change,
+                       ESP_ZB_ZCL_ATTR_TYPE_U8, LIGHT_CHANGE_U8,
                        LIGHT_REPORT_MIN_INTERVAL, LIGHT_REPORT_MAX_INTERVAL);
-
-    /* 色彩 CurrentHue/CurrentSaturation (0x0300/0x0000/0x0001, u8) */
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
                        ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID,
-                       ESP_ZB_ZCL_ATTR_TYPE_U8, &s_hue_change,
+                       ESP_ZB_ZCL_ATTR_TYPE_U8, LIGHT_CHANGE_U8,
                        LIGHT_REPORT_MIN_INTERVAL, LIGHT_REPORT_MAX_INTERVAL);
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
                        ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID,
-                       ESP_ZB_ZCL_ATTR_TYPE_U8, &s_sat_change,
+                       ESP_ZB_ZCL_ATTR_TYPE_U8, LIGHT_CHANGE_U8,
                        LIGHT_REPORT_MIN_INTERVAL, LIGHT_REPORT_MAX_INTERVAL);
-
-    /* 色彩 CurrentX/CurrentY (0x0300/0x0003/0x0004, u16) */
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
                        ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID,
-                       ESP_ZB_ZCL_ATTR_TYPE_U16, &s_x_change,
+                       ESP_ZB_ZCL_ATTR_TYPE_U16, LIGHT_CHANGE_U16,
                        LIGHT_REPORT_MIN_INTERVAL, LIGHT_REPORT_MAX_INTERVAL);
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
                        ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID,
-                       ESP_ZB_ZCL_ATTR_TYPE_U16, &s_y_change,
+                       ESP_ZB_ZCL_ATTR_TYPE_U16, LIGHT_CHANGE_U16,
                        LIGHT_REPORT_MIN_INTERVAL, LIGHT_REPORT_MAX_INTERVAL);
-
-    /* 色彩模式 ColorMode (0x0300/0x0008, enum8=0x30) */
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
                        ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID,
-                       0x30, &s_colormode_change,
+                       0x30, 0,
                        LIGHT_REPORT_MIN_INTERVAL, LIGHT_REPORT_MAX_INTERVAL);
-
-    /* 色温 ColorTemperatureMireds (0x0300/0x0007, u16) */
     send_config_report(short_addr, endpoint,
                        ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
                        ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID,
-                       ESP_ZB_ZCL_ATTR_TYPE_U16, &s_ct_change,
+                       ESP_ZB_ZCL_ATTR_TYPE_U16, LIGHT_CHANGE_U16,
                        LIGHT_REPORT_MIN_INTERVAL, LIGHT_REPORT_MAX_INTERVAL);
 }
 
 /* ==================== 彩色灯绑定下发 ==================== */
 
-static void light_bind_cb(esp_zb_zdp_status_t status, void *user_ctx)
-{
-    ESP_LOGI(TAG, "Light bind response: status=0x%02x%s", status,
-             status == 0 ? "" : " (failed)");
-}
+static const uint16_t k_light_bind_clusters[] = {
+    ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+    ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+    ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+};
 
-/**
- * @brief 将彩灯各集群绑定到网关端点（报告目标）
- *
- * Configure Reporting 只告诉子设备“报哪些属性、多久报”，但 ZCL 属性上报
- * 需要一条绑定，指明报告发往哪里。这里把子设备(源)的 OnOff/Level/ColorControl
- * 集群绑定到本网关端点，这样子设备才会把色温/色彩/开关变化主动上报上来。
- *
- * @param short_addr 子设备短地址（请求发往地址）
- * @param endpoint   子设备上的源端点
- * @param src_ieee   子设备的 IEEE 地址（绑定记录里的源地址）
- */
 void zdp_discovery_bind_light(uint16_t short_addr, uint8_t endpoint, esp_zb_ieee_addr_t src_ieee)
 {
-    static const uint16_t bind_clusters[] = {
-        ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
-        ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
-        ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-    };
-
-    /* 目的为网关自身：读取本协调器 IEEE */
-    esp_zb_ieee_addr_t dst_ieee;
-    esp_zb_get_long_address(dst_ieee);
-
-    for (size_t i = 0; i < sizeof(bind_clusters) / sizeof(bind_clusters[0]); i++) {
-        esp_zb_zdo_bind_req_param_t bind_req;
-        memset(&bind_req, 0, sizeof(bind_req));
-        memcpy(bind_req.src_address, src_ieee, sizeof(bind_req.src_address));
-        bind_req.src_endp = endpoint;
-        bind_req.cluster_id = bind_clusters[i];
-        bind_req.dst_addr_mode = ESP_ZB_ZDO_BIND_DST_ADDR_MODE_64_BIT_EXTENDED;
-        memcpy(bind_req.dst_address_u.addr_long, dst_ieee, sizeof(bind_req.dst_address_u.addr_long));
-        bind_req.dst_endp = HA_GW_ENDPOINT;
-        bind_req.req_dst_addr = short_addr;
-
-        esp_zb_zdo_device_bind_req(&bind_req, light_bind_cb, NULL);
-        ESP_LOGI(TAG, "Bind cluster=0x%04x of 0x%04x ep=%d -> gateway ep=%d",
-                 bind_clusters[i], short_addr, endpoint, HA_GW_ENDPOINT);
+    const size_t n = sizeof(k_light_bind_clusters) / sizeof(k_light_bind_clusters[0]);
+    for (size_t i = 0; i < n; i++) {
+        zb_tx_bind(short_addr, endpoint, k_light_bind_clusters[i], src_ieee);
     }
 }
 
@@ -711,6 +597,8 @@ void zdp_discovery_handle_device_leave(uint16_t short_addr, const esp_zb_ieee_ad
     if (info && info->device_id != DEVICE_ID_UNKNOWN) {
         device_info_remove_by_device_id(info->device_id);
     }
+
+    zigbee_db_remove(ieee, short_addr);
 }
 
 /* ==================== 读取 Basic 属性 ==================== */
@@ -718,26 +606,7 @@ void zdp_discovery_handle_device_leave(uint16_t short_addr, const esp_zb_ieee_ad
 void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint)
 {
     ESP_LOGI(TAG, "Reading Basic attributes from device 0x%04x, endpoint=%d", short_addr, endpoint);
-
-    static const uint16_t attr_list[] = {
-        ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID,
-        ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID,
-        ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID,
-        ZB_BASIC_ATTR_DEVICE_ID,
-    };
-
-    esp_zb_zcl_read_attr_cmd_t cmd_req;
-    memset(&cmd_req, 0, sizeof(cmd_req));
-    cmd_req.zcl_basic_cmd.dst_addr_u.addr_short = short_addr;
-    cmd_req.zcl_basic_cmd.dst_endpoint = endpoint;
-    cmd_req.zcl_basic_cmd.src_endpoint = HA_GW_ENDPOINT;
-    cmd_req.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-    cmd_req.clusterID = ESP_ZB_ZCL_CLUSTER_ID_BASIC;
-    cmd_req.attr_number = sizeof(attr_list) / sizeof(attr_list[0]);
-    cmd_req.attr_field = (uint16_t *)attr_list;
-    cmd_req.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
-    uint8_t seq = esp_zb_zcl_read_attr_cmd_req(&cmd_req);
-    ESP_LOGI(TAG, "Read Attributes command sent, seq=%u", seq);
+    zb_tx_read_basic(short_addr, endpoint);
 }
 
 /* ==================== 初始化 ==================== */

@@ -131,6 +131,41 @@ void zigbee_db_add_or_update(const esp_zb_ieee_addr_t ieee, uint16_t short_addr)
     ESP_LOGW(TAG, "Device DB full (%d), dropped 0x%04x", ZIGBEE_DB_MAX_DEVICES, short_addr);
 }
 
+void zigbee_db_remove(const esp_zb_ieee_addr_t ieee, uint16_t short_addr)
+{
+    MutexGuard guard;
+    uint16_t mapped_short = short_addr;
+    const bool have_ieee = ieee && !(ieee[0] == 0 && ieee[1] == 0 && ieee[2] == 0 && ieee[3] == 0 &&
+                                     ieee[4] == 0 && ieee[5] == 0 && ieee[6] == 0 && ieee[7] == 0);
+
+    for (int i = 0; i < ZIGBEE_DB_MAX_DEVICES; i++) {
+        if (!s_devices[i].in_use) {
+            continue;
+        }
+        bool match = false;
+        if (have_ieee && memcmp(s_devices[i].ieee_addr, ieee, sizeof(esp_zb_ieee_addr_t)) == 0) {
+            match = true;
+        }
+        if (short_addr != 0xFFFF && s_devices[i].short_addr == short_addr) {
+            match = true;
+        }
+        if (match) {
+            mapped_short = s_devices[i].short_addr;
+            ESP_LOGI(TAG, "Removed known device short=0x%04x", mapped_short);
+            memset(&s_devices[i], 0, sizeof(s_devices[i]));
+        }
+    }
+
+    if (mapped_short == 0xFFFF) {
+        return;
+    }
+    for (int i = 0; i < MAX_BRIDGED_EPS; i++) {
+        if (s_ep_map[i].in_use && s_ep_map[i].short_addr == mapped_short) {
+            memset(&s_ep_map[i], 0, sizeof(s_ep_map[i]));
+        }
+    }
+}
+
 /* ==================== 桥接端点映射 ==================== */
 
 void zigbee_db_register_ep(uint16_t short_addr, uint8_t endpoint)

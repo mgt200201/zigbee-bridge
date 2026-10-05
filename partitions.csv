@@ -1,12 +1,25 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-# Note: Firmware partition offset needs to be 64K aligned, initial 36K (9 sectors) are reserved for bootloader and partition table
-esp_secure_cert,  0x3F, ,0xd000,    0x2000, encrypted
-nvs,        data, nvs,     0x10000,  0xE000,
-nvs_keys, data, nvs_keys,,          0x1000, encrypted
-otadata,    data, ota,     ,         0x2000
-phy_init,   data, phy,     ,         0x1000,
-ota_0,      app,  ota_0,          ,  0x1D0000,
-ota_1,      app,  ota_1,          ,  0x1D0000,
-fctry,      data, nvs,            ,  0x6000,
-zb_storage, data, fat,            ,  0x20000
-zb_fct,     data, fat,            ,  1K,
+#
+# Target: ESP32-S3-WROOM-1-N16R8
+#   Flash  16 MB Quad SPI   (datasheet Table 1-1)
+#   PSRAM   8 MB Octal SPI  (not a flash partition)
+# 16MB = 0x1000000. App 槽 64KB 对齐。
+#
+# 4MB 表是错的：boot 日志里的 "SPI Flash Size : 4MB" 来自
+# CONFIG_ESPTOOLPY_FLASHSIZE，不是芯片探测结果。
+#
+# 16MB Matter 网关主流：无 factory；等大 A/B；fctry + secure_cert；
+# Zigbee NV；coredump；rcp_fw 存 H2 官方 ot_rcp（Thread BR 同款思路）。
+#
+esp_secure_cert,  0x3F, ,        0xd000,    0x2000, encrypted
+nvs,              data, nvs,     0x10000,   0xC000,
+nvs_keys,         data, nvs_keys,0x1C000,   0x1000, encrypted
+otadata,          data, ota,     0x1D000,   0x2000,
+phy_init,         data, phy,     0x1F000,   0x1000,
+ota_0,            app,  ota_0,   0x20000,   0x400000,
+ota_1,            app,  ota_1,   0x420000,  0x400000,
+rcp_fw,           data, spiffs,  0x820000,  0x100000,
+coredump,         data, coredump,0x920000,  0x10000,
+fctry,            data, nvs,     0x930000,  0x6000,
+zb_storage,       data, fat,     0x936000,  0x40000,
+zb_fct,           data, fat,     0x976000,  0x1000,

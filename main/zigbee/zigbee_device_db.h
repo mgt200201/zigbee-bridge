@@ -60,6 +60,9 @@ zigbee_db_device_t *zigbee_db_find_by_short(uint16_t short_addr);
  */
 void zigbee_db_add_or_update(const esp_zb_ieee_addr_t ieee, uint16_t short_addr);
 
+/** Remove by IEEE (preferred) and/or short address; also drops endpoint map rows. */
+void zigbee_db_remove(const esp_zb_ieee_addr_t ieee, uint16_t short_addr);
+
 /* ==================== 桥接端点映射 ==================== */
 
 void zigbee_db_register_ep(uint16_t short_addr, uint8_t endpoint);
