@@ -42,6 +42,7 @@
 #include <setup_payload/ManualSetupPayloadGenerator.h>
 
 #include <common_macros.h>
+#include <esp_timer.h>
 
 static const char *TAG = "bridge_manager";
 
@@ -55,17 +56,61 @@ static uint16_t s_aggregator_ep_id = chip::kInvalidEndpointId;
 /* Zigbee 栈就绪标志：esp_zb_init() 之前为 false。 */
 static volatile bool s_zb_stack_ready = false;
 
-/* ---- 下行颜色配对影子状态（按 Matter 端点索引） ----
- * Matter 控制器一次只写一个颜色属性（如 CurrentX），而 Zigbee 命令需要成对值
- * (X+Y 或 H+S)。此影子表缓存配对值，凑齐后再发命令。 */
-#define COLOR_EP_SHADOW_SLOTS 8
+/* 开关与亮度解耦：开/关只发 OnOff；关着时不发 MoveToLevel。
+ * level<=1 为 Matter 关灯地板值，一律不下发（避免关灯过程点到 1%）。 */
+#define LIGHT_LEVEL_SLOTS 8
 typedef struct {
     uint16_t matter_ep;
     bool valid;
-    bool have_x, have_y;       /**< CurrentX / CurrentY 是否收到过 */
-    bool have_hue, have_sat;   /**< CurrentHue / CurrentSaturation 是否收到过 */
+    bool is_on;               /* 最近一次 OnOff（下行或 Zigbee 上报） */
+    uint8_t last_level;       /* 上次非 0 亮度（仅记忆） */
+} light_level_shadow_t;
+static light_level_shadow_t s_light_level[LIGHT_LEVEL_SLOTS];
+
+static light_level_shadow_t *light_level_find(uint16_t matter_ep)
+{
+    for (int i = 0; i < LIGHT_LEVEL_SLOTS; i++) {
+        if (s_light_level[i].valid && s_light_level[i].matter_ep == matter_ep) {
+            return &s_light_level[i];
+        }
+    }
+    for (int i = 0; i < LIGHT_LEVEL_SLOTS; i++) {
+        if (!s_light_level[i].valid) {
+            s_light_level[i] = {};
+            s_light_level[i].matter_ep = matter_ep;
+            s_light_level[i].valid = true;
+            return &s_light_level[i];
+        }
+    }
+    return NULL;
+}
+
+static void light_remember_level(uint16_t matter_ep, uint8_t level)
+{
+    if (level == 0 || level == 0xFF) {
+        return;
+    }
+    light_level_shadow_t *s = light_level_find(matter_ep);
+    if (s) {
+        s->last_level = level;
+    }
+}
+
+/* ---- 下行颜色：Hue/Sat（或 X/Y）分两次写属性，立即发会先带旧配对再纠正。
+ * 80ms 防抖合并成一次；HA 每次调色带的 On 若 Matter 已是 On 则无属性回调，这里补发。 */
+#define COLOR_EP_SHADOW_SLOTS 8
+#define COLOR_DEBOUNCE_US     80000
+typedef struct {
+    uint16_t matter_ep;
+    bool valid;
+    bool have_x, have_y;
+    bool have_hue, have_sat;
     uint16_t x, y;
     uint8_t hue, sat;
+    uint16_t zshort;
+    uint8_t zep;
+    esp_timer_handle_t hs_timer;
+    esp_timer_handle_t xy_timer;
 } color_ep_shadow_t;
 static color_ep_shadow_t s_color_ep_shadow[COLOR_EP_SHADOW_SLOTS];
 
@@ -78,31 +123,141 @@ static color_ep_shadow_t *color_ep_shadow_find(uint16_t matter_ep)
     }
     for (int i = 0; i < COLOR_EP_SHADOW_SLOTS; i++) {
         if (!s_color_ep_shadow[i].valid) {
+            s_color_ep_shadow[i] = {};
             s_color_ep_shadow[i].matter_ep = matter_ep;
             s_color_ep_shadow[i].valid = true;
-            s_color_ep_shadow[i].have_x = s_color_ep_shadow[i].have_y = false;
-            s_color_ep_shadow[i].have_hue = s_color_ep_shadow[i].have_sat = false;
-            s_color_ep_shadow[i].x = s_color_ep_shadow[i].y = 0;
-            s_color_ep_shadow[i].hue = s_color_ep_shadow[i].sat = 0;
             return &s_color_ep_shadow[i];
         }
     }
     return NULL;
 }
 
-/* ---- 上行(上报)标志：Zigbee→Matter 上报更新 Matter 属性时，
-       会触发 PRE_UPDATE(bridge_manager_attr_update) 把命令回发给 Zigbee，
-       形成 "上报 → 又下发改回 " 的反馈环（日志里可见 MoveToLevel/MoveToColor 被反复回发）。
-       置位后 bridge_manager_attr_update 提前返回，避免回发。 ---- */
-static bool s_processing_uplink = false;
+static void color_ensure_on(uint16_t matter_ep, uint16_t zshort, uint8_t zep)
+{
+    light_level_shadow_t *lv = light_level_find(matter_ep);
+    /* Matter 已是 On 时 HA 仍发 On，但属性不变 → 无下行；补发保证 Zigbee 侧亮着才能吃颜色 */
+    if (!lv || lv->is_on) {
+        zb_tx_on_off(zshort, zep, true);
+        if (lv) {
+            lv->is_on = true;
+        }
+    }
+}
+
+static void color_hs_debounce_cb(void *arg)
+{
+    color_ep_shadow_t *shadow = static_cast<color_ep_shadow_t *>(arg);
+    if (!shadow->valid || !shadow->have_hue || !shadow->have_sat) {
+        return;
+    }
+    color_ensure_on(shadow->matter_ep, shadow->zshort, shadow->zep);
+    zb_tx_move_to_hue_sat(shadow->zshort, shadow->zep, shadow->hue, shadow->sat);
+}
+
+static void color_xy_debounce_cb(void *arg)
+{
+    color_ep_shadow_t *shadow = static_cast<color_ep_shadow_t *>(arg);
+    if (!shadow->valid || !shadow->have_x || !shadow->have_y) {
+        return;
+    }
+    color_ensure_on(shadow->matter_ep, shadow->zshort, shadow->zep);
+    zb_tx_move_to_color(shadow->zshort, shadow->zep, shadow->x, shadow->y);
+}
+
+static void color_schedule_hs(color_ep_shadow_t *shadow, uint16_t zshort, uint8_t zep)
+{
+    shadow->zshort = zshort;
+    shadow->zep = zep;
+    if (!shadow->hs_timer) {
+        esp_timer_create_args_t args = {
+            .callback = &color_hs_debounce_cb,
+            .arg = shadow,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "clr_hs",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&args, &shadow->hs_timer) != ESP_OK) {
+            color_hs_debounce_cb(shadow);
+            return;
+        }
+    }
+    esp_timer_stop(shadow->hs_timer);
+    esp_timer_start_once(shadow->hs_timer, COLOR_DEBOUNCE_US);
+}
+
+static void color_schedule_xy(color_ep_shadow_t *shadow, uint16_t zshort, uint8_t zep)
+{
+    shadow->zshort = zshort;
+    shadow->zep = zep;
+    if (!shadow->xy_timer) {
+        esp_timer_create_args_t args = {
+            .callback = &color_xy_debounce_cb,
+            .arg = shadow,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "clr_xy",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&args, &shadow->xy_timer) != ESP_OK) {
+            color_xy_debounce_cb(shadow);
+            return;
+        }
+    }
+    esp_timer_stop(shadow->xy_timer);
+    esp_timer_start_once(shadow->xy_timer, COLOR_DEBOUNCE_US);
+}
+
+/* ---- 上行抑制：Zigbee→Matter 写属性会触发 PRE_UPDATE，若全局屏蔽会把
+       同时到来的 HA Off 一并丢掉（灯关不掉）。只压掉「正在写入的同 ep/cluster/attr」回声。 ---- */
+static int s_uplink_depth = 0;
+static uint16_t s_uplink_ep = 0xFFFF;
+static uint32_t s_uplink_cluster = 0;
+static uint32_t s_uplink_attr = 0;
 
 static esp_err_t bridge_set_attr_no_echo(uint16_t ep, uint32_t cluster, uint32_t attr,
                                          esp_matter_attr_val_t *val)
 {
-    s_processing_uplink = true;
+    s_uplink_depth++;
+    s_uplink_ep = ep;
+    s_uplink_cluster = cluster;
+    s_uplink_attr = attr;
     esp_err_t err = attribute::update(ep, cluster, attr, val);
-    s_processing_uplink = false;
+    s_uplink_depth--;
+    if (s_uplink_depth <= 0) {
+        s_uplink_depth = 0;
+        s_uplink_ep = 0xFFFF;
+    }
     return err;
+}
+
+/* OnLevel=null：开灯时沿用上次 CurrentLevel；非 null（旧固件写成 254）会每次开到满亮。 */
+static void bridge_force_on_level_null(uint16_t matter_ep)
+{
+    esp_matter_attr_val_t val = esp_matter_nullable_uint8(nullable<uint8_t>());
+    esp_err_t err = bridge_set_attr_no_echo(matter_ep, LevelControl::Id,
+                                            LevelControl::Attributes::OnLevel::Id, &val);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "OnLevel null skip ep=%u: %s", matter_ep, esp_err_to_name(err));
+    }
+}
+
+static void bridge_clear_on_level_all_lights(void)
+{
+    node_t *node = node::get();
+    if (!node) {
+        return;
+    }
+    int cleared = 0;
+    for (endpoint_t *ep = endpoint::get_first(node); ep; ep = endpoint::get_next(ep)) {
+        if (!cluster::get(ep, LevelControl::Id)) {
+            continue;
+        }
+        uint16_t id = endpoint::get_id(ep);
+        bridge_force_on_level_null(id);
+        cleared++;
+    }
+    if (cleared > 0) {
+        ESP_LOGI(TAG, "Cleared OnLevel on %d LevelControl endpoint(s)", cleared);
+    }
 }
 
 /* ==================== Bridge API 适配层（依赖注入） ==================== */
@@ -126,6 +281,10 @@ static void bridge_api_report_on_off(uint16_t short_addr, uint8_t endpoint, bool
         return;
     }
     uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
+    light_level_shadow_t *lv = light_level_find(matter_ep);
+    if (lv) {
+        lv->is_on = on;
+    }
     esp_matter_attr_val_t val = esp_matter_bool(on);
     esp_err_t err = bridge_set_attr_no_echo(matter_ep, OnOff::Id,
                                             OnOff::Attributes::OnOff::Id, &val);
@@ -154,12 +313,13 @@ static void bridge_api_report_level(uint16_t short_addr, uint8_t endpoint, uint8
         return;
     }
     uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
-    /* CurrentLevel 槽位是可空 uint8（Matter 规范中 LevelControl 为 nullable），
-     * 往可空槽位写非可空值 esp_matter_uint8 会报 ESP_ERR_INVALID_ARG(258)。
-     * 因此用可空类型 esp_matter_nullable_uint8 上报；
-     * 并把 0xFF(255) 钳制为 254，避免触发 null 哨兵，否则 CurrentLevel 变 null 后，
-     * HA 下发 OnOff/MoveToLevel 时 CopyCurrentLevel 读到 null 会拒绝，灯无法控制。 */
+    /* 关灯后灯常报 level=0。若写入 Matter，下次 On 会 MoveToLevel(1) 盖掉灯内亮度。 */
+    if (level == 0) {
+        ESP_LOGD(TAG, "Ignore uplink level=0 ep=%u (keep last brightness)", matter_ep);
+        return;
+    }
     uint8_t lv = (level == 0xFF) ? 0xFE : level;
+    light_remember_level(matter_ep, lv);
     esp_matter_attr_val_t val = esp_matter_nullable_uint8(lv);
     esp_err_t err = bridge_set_attr_no_echo(matter_ep, LevelControl::Id,
                                             LevelControl::Attributes::CurrentLevel::Id, &val);
@@ -319,12 +479,14 @@ esp_err_t bridge_manager_create_devices_cb(esp_matter::endpoint_t *ep, uint32_t 
          * HA 无法识别为 light.*，会显示成 switch。 */
         endpoint::extended_color_light::config_t light_conf;
         light_conf.level_control.current_level = static_cast<uint8_t>(0);
-        light_conf.level_control.on_level = static_cast<uint8_t>(254);
+        /* OnLevel 保持默认 null。写成 254 时每次 OnOff→On 都会把 CurrentLevel
+         * 强制拉到满亮度，用户上次设的亮度会被丢掉。 */
         esp_err_t err = endpoint::extended_color_light::add(ep, &light_conf);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to add extended_color_light: %s", esp_err_to_name(err));
             return err;
         }
+        bridge_force_on_level_null(endpoint::get_id(ep));
         /* endpoint::extended_color_light::add() 默认只开启 color_temperature + xy 两个 feature，
          * 未开 hue_saturation(HS)。而 HS(MoveToHueAndSaturation) 命令依赖 HS feature bit，
          * 不开则 Matter 框架会直接返回 INVALID_COMMAND(0x81)，颜色无法用。这里补开，
@@ -368,6 +530,10 @@ esp_err_t bridge_manager_attr_update_cb(esp_matter::attribute::callback_type_t t
 void bridge_manager_set_zb_stack_ready(bool ready)
 {
     s_zb_stack_ready = ready;
+    if (ready) {
+        /* 旧固件把 OnLevel 持久化成 254，开机清一次，已有彩灯才能记住亮度。 */
+        bridge_clear_on_level_all_lights();
+    }
 }
 
 bool bridge_manager_is_device_bridged(uint16_t short_addr)
@@ -560,8 +726,9 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
         return ESP_OK;
     }
 
-    /* 上报(属性值由 Zigbee 上行写入)过程中触发本回调时，禁止回发命令，避免反馈环 */
-    if (s_processing_uplink) {
+    /* 仅抑制本次上行写入的回声；其它下行（如关灯）照常发给 Zigbee */
+    if (s_uplink_depth > 0 && endpoint_id == s_uplink_ep && cluster_id == s_uplink_cluster &&
+        attribute_id == s_uplink_attr) {
         return ESP_OK;
     }
 
@@ -580,13 +747,35 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
 
     case OnOff::Id:
         if (attribute_id == OnOff::Attributes::OnOff::Id) {
-            zb_tx_on_off(zshort, zep, val->val.b);
+            const bool on = val->val.b;
+            light_level_shadow_t *lv = light_level_find(endpoint_id);
+            if (lv) {
+                lv->is_on = on;
+            }
+            zb_tx_on_off(zshort, zep, on);
         }
         break;
 
     case LevelControl::Id:
         if (attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
-            zb_tx_move_to_level(zshort, zep, val->val.u8);
+            uint8_t level = val->val.u8;
+            light_level_shadow_t *lv = light_level_find(endpoint_id);
+            /* Matter 关灯地板 / 耦合噪声；不要用「On 后跳过一次 Level」，会把真调光吃掉 */
+            if (level <= 1) {
+                ESP_LOGI(TAG, "Skip MoveToLevel=%u (off/floor) ep=%u", level, endpoint_id);
+                break;
+            }
+            if (lv && !lv->is_on) {
+                ESP_LOGI(TAG, "Skip MoveToLevel=%u while Off ep=%u", level, endpoint_id);
+                break;
+            }
+            light_remember_level(endpoint_id, level);
+            /* MoveToLevelWithOnOff 时 Matter On 可能已是 true，补发 On 再调光 */
+            zb_tx_on_off(zshort, zep, true);
+            if (lv) {
+                lv->is_on = true;
+            }
+            zb_tx_move_to_level(zshort, zep, level);
         }
         break;
 
@@ -603,9 +792,7 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                 ESP_LOGI(TAG, "CurrentX=%u cached (Y not set yet), ep=%d", shadow->x, endpoint_id);
                 break;
             }
-            zb_tx_move_to_color(zshort, zep, shadow->x, shadow->y);
-            shadow->have_x = false;
-            shadow->have_y = false;
+            color_schedule_xy(shadow, zshort, zep);
         } else if (attribute_id == ColorControl::Attributes::CurrentY::Id) {
             shadow->y = val->val.u16;
             shadow->have_y = true;
@@ -613,9 +800,7 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                 ESP_LOGI(TAG, "CurrentY=%u cached (X not set yet), ep=%d", shadow->y, endpoint_id);
                 break;
             }
-            zb_tx_move_to_color(zshort, zep, shadow->x, shadow->y);
-            shadow->have_x = false;
-            shadow->have_y = false;
+            color_schedule_xy(shadow, zshort, zep);
         } else if (attribute_id == ColorControl::Attributes::CurrentHue::Id) {
             shadow->hue = val->val.u8;
             shadow->have_hue = true;
@@ -623,9 +808,7 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                 ESP_LOGI(TAG, "CurrentHue=%u cached (Sat not set yet), ep=%d", shadow->hue, endpoint_id);
                 break;
             }
-            zb_tx_move_to_hue_sat(zshort, zep, shadow->hue, shadow->sat);
-            shadow->have_hue = false;
-            shadow->have_sat = false;
+            color_schedule_hs(shadow, zshort, zep);
         } else if (attribute_id == ColorControl::Attributes::CurrentSaturation::Id) {
             shadow->sat = val->val.u8;
             shadow->have_sat = true;
@@ -633,10 +816,9 @@ esp_err_t bridge_manager_attr_update(uint16_t endpoint_id, uint32_t cluster_id,
                 ESP_LOGI(TAG, "CurrentSat=%u cached (Hue not set yet), ep=%d", shadow->sat, endpoint_id);
                 break;
             }
-            zb_tx_move_to_hue_sat(zshort, zep, shadow->hue, shadow->sat);
-            shadow->have_hue = false;
-            shadow->have_sat = false;
+            color_schedule_hs(shadow, zshort, zep);
         } else if (attribute_id == ColorControl::Attributes::ColorTemperatureMireds::Id) {
+            color_ensure_on(endpoint_id, zshort, zep);
             zb_tx_move_to_color_temp(zshort, zep, val->val.u16);
         }
         break;
