@@ -23,3 +23,6 @@ coredump,         data, coredump,0x920000,  0x10000,
 fctry,            data, nvs,     0x930000,  0x6000,
 zb_storage,       data, fat,     0x936000,  0x40000,
 zb_fct,           data, fat,     0x976000,  0x1000,
+# Zigbee 子设备 OTA 镜像暂存（HA 上传 → 网关 Zigbee OTA Server 下发）
+# zb_fct 结束于 0x977000；此处起用自定义 data(0x40)，约 5MB，剩余 ~1.5MB 留白。
+zb_ota,           data, 0x40,    0x978000,  0x500000,

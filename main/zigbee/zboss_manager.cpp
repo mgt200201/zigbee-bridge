@@ -25,6 +25,7 @@
 #include "bridge_manager.h"
 #include "zdp_discovery.h"
 #include "zb_tx_queue.h"
+#include "zb_device_ota.h"
 #include "watchdog.h"
 #include <esp_log.h>
 #include <esp_system.h>
@@ -154,9 +155,10 @@ static void zboss_task(void *pvParameters)
     /* 注：esp_zb_nwk_set_ed_timeout / esp_zb_nwk_set_leave_req_allowed
      *     等为 test-utils 私有 API，当前版本已移除。安全策略使用 ZBOSS 默认值。 */
 
-    /* 创建协调器端点（Basic + Identify Server） */
+    /* 创建协调器端点（Basic + Identify + OTA Upgrade Server） */
     esp_zb_on_off_switch_cfg_t switch_cfg = ESP_ZB_DEFAULT_ON_OFF_SWITCH_CONFIG();
     esp_zb_cluster_list_t *cluster_list = esp_zb_on_off_switch_clusters_create(&switch_cfg);
+    ESP_ERROR_CHECK(zb_device_ota_add_server_cluster(cluster_list));
 
     esp_zb_endpoint_config_t ep_config = {
         .endpoint = HA_GW_ENDPOINT,

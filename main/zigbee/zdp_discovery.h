@@ -111,6 +111,22 @@ void zdp_discovery_bind_light(uint16_t short_addr, uint8_t endpoint, esp_zb_ieee
 void zdp_discovery_send_register_status(uint16_t short_addr, uint8_t endpoint, uint16_t status);
 
 /**
+ * @brief 触发子设备主动上报当前状态（OnOff/Level/Color）
+ *
+ * 向子设备的 Basic 集群(0x0000)属性 0x1FFF 写入 U8 值 129。
+ * 子设备收到后会把 NVS 中保存的真实状态写回 ZCL 并主动上报一次，
+ * 用于在网关(重新)为设备创建 Matter 端点后，第一时间把设备真实状态
+ * 同步到 Matter，避免"重配后第一次控制无效"。
+ *
+ * 注意：这是子设备约定的触发点，必须写 Basic(0x0000)/0x1FFF 且类型为 U8，
+ * 与旧的 0xFC11 私有集群握手（zdp_discovery_send_register_status）不同。
+ *
+ * @param short_addr 目标设备短地址
+ * @param endpoint   目标设备端点号
+ */
+void zdp_discovery_request_state_report(uint16_t short_addr, uint8_t endpoint);
+
+/**
  * @brief 处理设备离网事件
  *
  * 当收到 ESP_ZB_ZDO_SIGNAL_LEAVE_INDICATION 且 rejoin==0 时调用。

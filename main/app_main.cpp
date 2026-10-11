@@ -32,6 +32,7 @@
 #include <esp_matter.h>
 #include <esp_matter_console.h>
 #include <esp_timer.h>
+#include <esp_netif.h>
 
 #include <platform/ESP32/ESP32Config.h>
 
@@ -47,6 +48,7 @@
 #include <common_macros.h>
 #include <app_bridged_device.h>
 
+
 #include <zboss_manager.h>
 #include <zdp_discovery.h>
 #include <bridge_manager.h>
@@ -54,6 +56,7 @@
 #include <wifi_manager.h>
 #include <ota_manager.h>
 #include <matter_ota.h>
+#include <zb_device_ota.h>
 #include <rcp_coprocessor.h>
 #include <commissioning_mgr.h>
 #include <button.h>
@@ -386,6 +389,12 @@ extern "C" void app_main(void)
     ota_manager_init();
     ota_manager_start_periodic_check();
 
+    /* Zigbee 子设备 OTA 暂存分区（HTTP 在拿到 WiFi IP 后启动） */
+    err = zb_device_ota_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "zb_device_ota_init: %s (child OTA unavailable)", esp_err_to_name(err));
+    }
+
     /* ---- 第 3 层：Zigbee 协议栈启动 ---- */
     zdp_discovery_init();
 
@@ -419,6 +428,30 @@ extern "C" void app_main(void)
                     gateway_erase_bridge_nvs();
                     device_info_clear_all();
                     esp_matter::factory_reset();
+                } else if (strcmp(line, "getIp") == 0) {
+                    /* 遍历所有 netif：打印每张网卡的 ifkey / up-down / IPv4，
+                     * 不依赖固定 ifkey（esp_netif_get_handle_from_ifkey）。
+                     * 日志用英文，避免串口终端把中文显示成乱码。 */
+                    esp_netif_t *netif = NULL;
+                    bool found = false;
+                    while ((netif = esp_netif_next(netif)) != NULL) {
+                        esp_netif_ip_info_t ip_info = {};
+                        esp_netif_get_ip_info(netif, &ip_info);
+                        const char *key = esp_netif_get_ifkey(netif);
+                        int up = esp_netif_is_netif_up(netif) ? 1 : 0;
+                        if (ip_info.ip.addr != 0) {
+                            ESP_LOGI(TAG, "Gateway IP [%s] up=%d: " IPSTR "  mask " IPSTR "  gw " IPSTR,
+                                     key, up,
+                                     IP2STR(&ip_info.ip), IP2STR(&ip_info.netmask),
+                                     IP2STR(&ip_info.gw));
+                            found = true;
+                        } else {
+                            ESP_LOGW(TAG, "netif [%s] up=%d: no IPv4", key, up);
+                        }
+                    }
+                    if (!found) {
+                        ESP_LOGW(TAG, "Gateway IP: not available (no netif has IPv4 - check WiFi)");
+                    }
                 } else if (strcmp(line, "entest") == 0 || strcmp(line, "bootest") == 0) {
                     const gpio_num_t pin = (strcmp(line, "bootest") == 0) ? RCP_BOOT_GPIO : RCP_EN_GPIO;
                     const char *name = (pin == RCP_BOOT_GPIO) ? "BOOT" : "EN";
@@ -503,7 +536,7 @@ extern "C" void app_main(void)
                     vTaskDelay(pdMS_TO_TICKS(500));
                     esp_restart();
                 } else if (strcmp(line, "help") == 0) {
-                    ESP_LOGI(TAG, "Commands: factoryreset, entest, bootest, dltest, iostest, synctest, help");
+                    ESP_LOGI(TAG, "Commands: factoryreset, getIp, entest, bootest, dltest, iostest, synctest, help");
                 } else if (strlen(line) > 0) {
                     ESP_LOGI(TAG, "Unknown command: '%s' (try 'help')", line);
                 }

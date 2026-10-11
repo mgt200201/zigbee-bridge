@@ -27,6 +27,7 @@
 #include "zb_tx_queue.h"
 #include "zcl_handler_registry.h"
 #include "zcl_metrics.h"
+#include "zb_device_ota.h"
 #include <zboss_manager.h>
 #include <bridge_manager.h>
 #include <device_info.h>
@@ -311,7 +312,13 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
         return err;
     }
 
-    /* 第二步：fallback — 读取属性响应（Basic 集群，所有设备通用） */
+    /* OTA Upgrade Server（子设备固件下发） */
+    err = zb_device_ota_handle_action(callback_id, message);
+    if (err != ESP_ERR_NOT_FOUND) {
+        return err;
+    }
+
+    /* fallback — 读取属性响应（Basic 集群，所有设备通用） */
     if (callback_id == ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID) {
         return zb_read_attr_resp_handler(
             (const esp_zb_zcl_cmd_read_attr_resp_message_t *)message);
@@ -328,15 +335,38 @@ esp_zb_core_action_callback_t zdp_discovery_get_action_handler(void)
 /* ==================== 读取 Basic 属性响应（设备标识） ==================== */
 
 /**
+ * @brief 将 ZCL 字符字符串属性拷贝到 C 字符串
+ *
+ * ZCL 字符串格式为 [长度字节][内容...]，需要按实际长度截断并补 '\0'。
+ */
+static void copy_zcl_string(uint8_t *data, uint16_t size, char *dst, size_t dst_size)
+{
+    if (!data || size < 2 || dst_size < 1) {
+        return;
+    }
+    size_t len = data[0];
+    size_t avail = size - 1;
+    if (len > avail) {
+        len = avail;
+    }
+    if (len > dst_size - 1) {
+        len = dst_size - 1;
+    }
+    memcpy(dst, &data[1], len);
+    dst[len] = '\0';
+}
+
+/**
  * @brief 解析 Read Attributes 响应，提取设备标识并桥接到 Matter
  *
  * 从 Basic 集群响应中解析：
- *   - Manufacturer Name (0x0001)
- *   - Model Identifier (0x0005)
- *   - SW Build ID (0x4000)
- *   - deviceId (0x4001)
+ *   - ZCL Version (0x0000) / Application Version (0x0001)
+ *   - Stack Version (0x0002) / HW Version (0x0003)
+ *   - Manufacturer Name (0x0004) / Model Identifier (0x0005)
+ *   - Date Code (0x0006) / SW Build ID (0x4000) / deviceId (0x4001)
  *
- * 然后调用 bridge_manager_on_device_identified() 完成注册。
+ * 然后调用 bridge_manager_on_device_identified() 完成注册，
+ * 标识信息最终写入 Matter 桥接端点的 Bridged Device Basic Information 集群。
  */
 static esp_err_t zb_read_attr_resp_handler(
     const esp_zb_zcl_cmd_read_attr_resp_message_t *message)
@@ -353,56 +383,77 @@ static esp_err_t zb_read_attr_resp_handler(
     uint32_t device_id = DEVICE_ID_UNKNOWN;
     uint16_t uiid = UIID_UNKNOWN;
     bool got_device_id = false;
-    char manufacturer[MAX_NAME_LEN] = {0};
-    char model[MAX_NAME_LEN] = {0};
-    char sw_version[16] = {0};
+    device_identity_t identity = {};
+    uint8_t zcl_version = 0;
+    uint8_t stack_version = 0;
 
     /* 遍历所有返回的属性 */
     esp_zb_zcl_read_attr_resp_variable_t *var = message->variables;
     while (var) {
+        bool ok = (var->status == ESP_ZB_ZCL_STATUS_SUCCESS) && (var->attribute.data.value != NULL);
+        uint8_t *data = (uint8_t *)var->attribute.data.value;
+        uint16_t size = (uint16_t)var->attribute.data.size;
+
         switch (var->attribute.id) {
 
+        case ESP_ZB_ZCL_ATTR_BASIC_ZCL_VERSION_ID:
+            if (ok && size >= 1) {
+                zcl_version = data[0];
+                ESP_LOGI(TAG, "  ZCL Version (0x0000): %u", zcl_version);
+            }
+            break;
+
+        case ESP_ZB_ZCL_ATTR_BASIC_APPLICATION_VERSION_ID:
+            if (ok && size >= 1) {
+                identity.app_version = data[0];
+                ESP_LOGI(TAG, "  Application Version (0x0001): %u", identity.app_version);
+            }
+            break;
+
+        case ESP_ZB_ZCL_ATTR_BASIC_STACK_VERSION_ID:
+            if (ok && size >= 1) {
+                stack_version = data[0];
+                ESP_LOGI(TAG, "  Stack Version (0x0002): %u", stack_version);
+            }
+            break;
+
+        case ESP_ZB_ZCL_ATTR_BASIC_HW_VERSION_ID:
+            if (ok && size >= 1) {
+                identity.hw_version = data[0];
+                ESP_LOGI(TAG, "  HW Version (0x0003): %u", identity.hw_version);
+            }
+            break;
+
         case ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID:
-            if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && var->attribute.data.size > 0) {
-                uint8_t *data = (uint8_t *)var->attribute.data.value;
-                uint8_t len = data[0];
-                if (len > 0) {
-                    uint8_t copy_len = (len < MAX_NAME_LEN - 1) ? len : (MAX_NAME_LEN - 1);
-                    memcpy(manufacturer, &data[1], copy_len);
-                    manufacturer[copy_len] = '\0';
-                }
-                ESP_LOGI(TAG, "  Manufacturer: %.*s", len, &data[1]);
+            if (ok) {
+                copy_zcl_string(data, size, identity.manufacturer, sizeof(identity.manufacturer));
+                ESP_LOGI(TAG, "  Manufacturer: %s", identity.manufacturer);
             }
             break;
 
         case ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID:
-            if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && var->attribute.data.size > 0) {
-                uint8_t *data = (uint8_t *)var->attribute.data.value;
-                uint8_t len = data[0];
-                if (len > 0) {
-                    uint8_t copy_len = (len < MAX_NAME_LEN - 1) ? len : (MAX_NAME_LEN - 1);
-                    memcpy(model, &data[1], copy_len);
-                    model[copy_len] = '\0';
-                }
-                ESP_LOGI(TAG, "  Model: %.*s", len, &data[1]);
+            if (ok) {
+                copy_zcl_string(data, size, identity.model, sizeof(identity.model));
+                ESP_LOGI(TAG, "  Model: %s", identity.model);
+            }
+            break;
+
+        case ESP_ZB_ZCL_ATTR_BASIC_DATE_CODE_ID:
+            if (ok) {
+                copy_zcl_string(data, size, identity.date_code, sizeof(identity.date_code));
+                ESP_LOGI(TAG, "  Date Code (0x0006): %s", identity.date_code);
             }
             break;
 
         case ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID:
-            if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && var->attribute.data.size > 0) {
-                uint8_t *data = (uint8_t *)var->attribute.data.value;
-                uint8_t len = data[0];
-                if (len > 0) {
-                    uint8_t copy_len = (len < (int)sizeof(sw_version) - 1) ? len : ((int)sizeof(sw_version) - 1);
-                    memcpy(sw_version, &data[1], copy_len);
-                    sw_version[copy_len] = '\0';
-                }
-                ESP_LOGI(TAG, "  SW Version: %.*s", len, &data[1]);
+            if (ok) {
+                copy_zcl_string(data, size, identity.sw_version, sizeof(identity.sw_version));
+                ESP_LOGI(TAG, "  SW Version: %s", identity.sw_version);
             }
             break;
 
         case ZB_BASIC_ATTR_DEVICE_ID:
-            if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && var->attribute.data.size >= 4) {
+            if (ok && size >= 4) {
                 device_id = *(uint32_t *)var->attribute.data.value;
                 got_device_id = true;
                 ESP_LOGI(TAG, "  deviceId (0x4001): 0x%08lX", (unsigned long)device_id);
@@ -416,17 +467,17 @@ static esp_err_t zb_read_attr_resp_handler(
     }
 
     /* 根据型号推断 uiid（供设备识别 + 上报配置决策共同使用） */
-    uint16_t detected_uiid = device_info_lookup_uiid(model);
+    uint16_t detected_uiid = device_info_lookup_uiid(identity.model);
     if (detected_uiid != UIID_UNKNOWN) {
         uiid = detected_uiid;
         ESP_LOGI(TAG, "  uiid (from model): 0x%04X", uiid);
     }
 
-    /* 设备标识完成 → 桥接到 Matter */
+    /* 设备标识完成 → 桥接到 Matter（含厂商/型号/版本信息） */
     known_device_t *known = zboss_manager_find_by_short(short_addr);
     if (got_device_id && device_id != DEVICE_ID_UNKNOWN && device_id != 0) {
         bridge_manager_on_device_identified(device_id, uiid, short_addr, src_endpoint,
-                                            known ? known->ieee_addr : NULL);
+                                            known ? known->ieee_addr : NULL, &identity);
     } else {
         ESP_LOGW(TAG, "No valid deviceId found in Read Attr response");
     }
@@ -455,6 +506,15 @@ void zdp_discovery_send_register_status(uint16_t short_addr, uint8_t endpoint, u
     ESP_LOGI(TAG, "Send register_status=%u to 0x%04x ep=%d (cluster=0xFC11, attr=0x1FFF)",
              status, short_addr, endpoint);
     zb_tx_write_u16(short_addr, endpoint, 0xFC11, 0x1FFF, status);
+}
+
+void zdp_discovery_request_state_report(uint16_t short_addr, uint8_t endpoint)
+{
+    /* 子设备约定：Basic(0x0000) 属性 0x1FFF 写 U8=129 → 设备把 NVS 中保存的
+     * 真实状态写回 ZCL 并主动上报一次。用于新建/重建 Matter 端点后立即同步状态。 */
+    ESP_LOGI(TAG, "Request state report from 0x%04x ep=%d (Basic 0x1FFF=129)",
+             short_addr, endpoint);
+    zb_tx_write_u8(short_addr, endpoint, ESP_ZB_ZCL_CLUSTER_ID_BASIC, 0x1FFF, 129);
 }
 
 /* ==================== 温湿度传感器上报配置 ==================== */

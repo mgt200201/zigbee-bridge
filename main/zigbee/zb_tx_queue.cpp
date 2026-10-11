@@ -39,6 +39,7 @@ typedef enum {
     ZB_TX_MOVE_TO_HUE_SAT,
     ZB_TX_MOVE_TO_COLOR_TEMP,
     ZB_TX_WRITE_U16,
+    ZB_TX_WRITE_U8,
     ZB_TX_CONFIG_REPORT,
     ZB_TX_BIND,
     ZB_TX_READ_BASIC,
@@ -237,6 +238,29 @@ static void dispatch_tx(const zb_tx_item_t *item)
                  item->cluster, item->attr, item->u16_a, item->short_addr, item->endpoint);
         break;
     }
+    case ZB_TX_WRITE_U8: {
+        uint8_t value = item->u8_a;
+        esp_zb_zcl_attribute_t attr = {
+            .id = item->attr,
+            .data = {
+                .type = ESP_ZB_ZCL_ATTR_TYPE_U8,
+                .size = sizeof(uint8_t),
+                .value = &value,
+            },
+        };
+        esp_zb_zcl_write_attr_cmd_t cmd = {
+            .zcl_basic_cmd = basic,
+            .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+            .clusterID = item->cluster,
+            .attr_number = 1,
+            .attr_field = &attr,
+        };
+        cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+        esp_zb_zcl_write_attr_cmd_req(&cmd);
+        ESP_LOGI(TAG, "Write u8 cluster=0x%04x attr=0x%04x val=%u -> 0x%04x ep=%d",
+                 item->cluster, item->attr, item->u8_a, item->short_addr, item->endpoint);
+        break;
+    }
     case ZB_TX_CONFIG_REPORT: {
         uint16_t change16 = item->u16_a;
         uint8_t change8 = (uint8_t)item->u16_a;
@@ -287,8 +311,13 @@ static void dispatch_tx(const zb_tx_item_t *item)
     }
     case ZB_TX_READ_BASIC: {
         static const uint16_t attr_list[] = {
+            ESP_ZB_ZCL_ATTR_BASIC_ZCL_VERSION_ID,
+            ESP_ZB_ZCL_ATTR_BASIC_APPLICATION_VERSION_ID,
+            ESP_ZB_ZCL_ATTR_BASIC_STACK_VERSION_ID,
+            ESP_ZB_ZCL_ATTR_BASIC_HW_VERSION_ID,
             ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID,
             ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID,
+            ESP_ZB_ZCL_ATTR_BASIC_DATE_CODE_ID,
             ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID,
             ZB_BASIC_ATTR_DEVICE_ID,
         };
@@ -434,6 +463,19 @@ void zb_tx_write_u16(uint16_t short_addr, uint8_t endpoint, uint16_t cluster, ui
     item.cluster = cluster;
     item.attr = attr;
     item.u16_a = value;
+    enqueue(&item);
+}
+
+void zb_tx_write_u8(uint16_t short_addr, uint8_t endpoint, uint16_t cluster, uint16_t attr, uint8_t value)
+{
+    zb_tx_item_t item;
+    memset(&item, 0, sizeof(item));
+    item.kind = ZB_TX_WRITE_U8;
+    item.short_addr = short_addr;
+    item.endpoint = endpoint;
+    item.cluster = cluster;
+    item.attr = attr;
+    item.u8_a = value;
     enqueue(&item);
 }
 

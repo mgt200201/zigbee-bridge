@@ -44,6 +44,8 @@
 #include <common_macros.h>
 #include <esp_timer.h>
 
+#include <string.h>
+
 static const char *TAG = "bridge_manager";
 
 using namespace chip::app::Clusters;
@@ -591,9 +593,120 @@ static uint32_t uiid_to_matter_device_type_id(uint16_t uiid)
     }
 }
 
+/* ==================== 桥接端点标识信息写入（0x0039） ====================
+ *
+ * Bridged Device Basic Information 集群的属性均为可选属性，esp-matter 的
+ * bridged_node::create() 默认只创建 Reachable/UniqueID/ClusterRevision/FeatureMap。
+ * 这里按需创建并写入厂商、型号、版本等信息，让 HA 能读到子设备的真实标识。 */
+
+static void bridge_basic_set_str(cluster_t *cluster, uint16_t ep, uint32_t attr_id,
+                                 attribute_t *(*create_fn)(cluster_t *, char *, uint16_t),
+                                 const char *value, const char *label)
+{
+    if (!value || value[0] == '\0') {
+        return;
+    }
+    if (!attribute::get(cluster, attr_id)) {
+        if (!create_fn(cluster, (char *)value, (uint16_t)strlen(value))) {
+            ESP_LOGW(TAG, "Create basic-info %s failed", label);
+            return;
+        }
+    }
+    esp_matter_attr_val_t val = esp_matter_char_str((char *)value, (uint16_t)strlen(value));
+    esp_err_t err = attribute::update(ep, BridgedDeviceBasicInformation::Id, attr_id, &val);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Update basic-info %s failed: %s", label, esp_err_to_name(err));
+    }
+}
+
+static void bridge_basic_set_u16(cluster_t *cluster, uint16_t ep, uint32_t attr_id,
+                                 attribute_t *(*create_fn)(cluster_t *, uint16_t),
+                                 uint16_t value, const char *label)
+{
+    if (!attribute::get(cluster, attr_id)) {
+        if (!create_fn(cluster, value)) {
+            ESP_LOGW(TAG, "Create basic-info %s failed", label);
+            return;
+        }
+    }
+    esp_matter_attr_val_t val = esp_matter_uint16(value);
+    esp_err_t err = attribute::update(ep, BridgedDeviceBasicInformation::Id, attr_id, &val);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Update basic-info %s failed: %s", label, esp_err_to_name(err));
+    }
+}
+
+static void bridge_basic_set_u32(cluster_t *cluster, uint16_t ep, uint32_t attr_id,
+                                 attribute_t *(*create_fn)(cluster_t *, uint32_t),
+                                 uint32_t value, const char *label)
+{
+    if (!attribute::get(cluster, attr_id)) {
+        if (!create_fn(cluster, value)) {
+            ESP_LOGW(TAG, "Create basic-info %s failed", label);
+            return;
+        }
+    }
+    esp_matter_attr_val_t val = esp_matter_uint32(value);
+    esp_err_t err = attribute::update(ep, BridgedDeviceBasicInformation::Id, attr_id, &val);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Update basic-info %s failed: %s", label, esp_err_to_name(err));
+    }
+}
+
+/**
+ * @brief 把 Zigbee 设备标识写入 Matter 桥接端点的 0x0039 集群
+ */
+static void bridge_apply_identity(uint16_t matter_ep, const device_identity_t *identity)
+{
+    if (!identity || matter_ep == 0 || matter_ep == chip::kInvalidEndpointId) {
+        return;
+    }
+    node_t *node = node::get();
+    endpoint_t *ep = node ? endpoint::get(node, matter_ep) : NULL;
+    if (!ep) {
+        ESP_LOGW(TAG, "No endpoint %u for identity info", matter_ep);
+        return;
+    }
+    cluster_t *cluster = cluster::get(ep, BridgedDeviceBasicInformation::Id);
+    if (!cluster) {
+        ESP_LOGW(TAG, "No BridgedDeviceBasicInformation cluster on ep %u", matter_ep);
+        return;
+    }
+
+    bridge_basic_set_str(cluster, matter_ep, BridgedDeviceBasicInformation::Attributes::VendorName::Id,
+                         &bridged_device_basic_information::attribute::create_vendor_name,
+                         identity->manufacturer, "VendorName");
+    bridge_basic_set_str(cluster, matter_ep, BridgedDeviceBasicInformation::Attributes::ProductName::Id,
+                         &bridged_device_basic_information::attribute::create_product_name,
+                         identity->model, "ProductName");
+    bridge_basic_set_str(cluster, matter_ep, BridgedDeviceBasicInformation::Attributes::SoftwareVersionString::Id,
+                         &bridged_device_basic_information::attribute::create_software_version_string,
+                         identity->sw_version, "SoftwareVersionString");
+    if (identity->app_version > 0) {
+        bridge_basic_set_u32(cluster, matter_ep, BridgedDeviceBasicInformation::Attributes::SoftwareVersion::Id,
+                             &bridged_device_basic_information::attribute::create_software_version,
+                             identity->app_version, "SoftwareVersion");
+    }
+    if (identity->hw_version > 0) {
+        bridge_basic_set_u16(cluster, matter_ep, BridgedDeviceBasicInformation::Attributes::HardwareVersion::Id,
+                             &bridged_device_basic_information::attribute::create_hardware_version,
+                             identity->hw_version, "HardwareVersion");
+    }
+    if (identity->date_code[0] != '\0') {
+        bridge_basic_set_str(cluster, matter_ep, BridgedDeviceBasicInformation::Attributes::ManufacturingDate::Id,
+                             &bridged_device_basic_information::attribute::create_manufacturing_date,
+                             identity->date_code, "ManufacturingDate");
+    }
+
+    ESP_LOGI(TAG, "Applied identity to Matter ep=%u (mfr=%s model=%s sw=%s app=%u hw=%u)",
+             matter_ep, identity->manufacturer, identity->model, identity->sw_version,
+             identity->app_version, identity->hw_version);
+}
+
 void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
                                           uint16_t short_addr, uint8_t endpoint,
-                                          const esp_zb_ieee_addr_t ieee_addr)
+                                          const esp_zb_ieee_addr_t ieee_addr,
+                                          const device_identity_t *identity)
 {
     device_info_t *info = device_info_find_by_device_id(device_id);
 
@@ -647,8 +760,19 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
             info->uiid = uiid;
         }
 
+        /* 重连/重启 resume 后端点上的标识属性不会自动重写，这里回填一次 */
+        if (identity) {
+            device_info_set_identity(device_id, identity);
+            uint16_t matter_ep = app_bridge_get_matter_endpointid_by_zigbee_shortaddr(short_addr);
+            bridge_apply_identity(matter_ep, identity);
+        }
+
         ESP_LOGI(TAG, "Device reconnected: device_id=0x%08X, Matter ep=%d",
                  (unsigned int)device_id, info->matter_endpoint_id);
+
+        /* 重配后新建的 Matter 端点初始状态是默认值(off/0)，而设备可能本是开着的。
+         * 主动触发设备上报一次真实状态，避免 HA 第一次控制"无效"。 */
+        zdp_discovery_request_state_report(short_addr, endpoint);
         return;
     }
 
@@ -676,11 +800,18 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
     device_info_t *new_info = device_info_register(device_id, uiid, short_addr, endpoint, ieee_addr);
     if (new_info) {
         device_info_set_matter_endpoint(device_id, matter_ep);
+        if (identity) {
+            device_info_set_identity(device_id, identity);
+            bridge_apply_identity(matter_ep, identity);
+        }
     }
     ESP_LOGI(TAG, "New device associated: device_id=0x%08X, uiid=0x%04hx, Matter ep=%d, zigbee=0x%04hx",
              (unsigned int)device_id, uiid, matter_ep, short_addr);
 
     zdp_discovery_send_register_status(short_addr, endpoint, 129);
+
+    /* 触发设备上报一次真实状态，让新建的 Matter 端点立即与设备同步。 */
+    zdp_discovery_request_state_report(short_addr, endpoint);
 }
 
 void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,

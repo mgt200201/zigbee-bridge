@@ -13,6 +13,7 @@
 #include <esp_matter_attribute_utils.h>
 #include <app_bridged_device.h>
 #include <esp_zigbee_core.h>
+#include "device_info.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -83,10 +84,14 @@ void bridge_manager_on_device_discovered(uint16_t short_addr, uint8_t endpoint);
 
 /**
  * @brief 设备标识完成回调（由 zdp_discovery 在 Read Attr 响应时调用）
+ *
+ * @param identity Basic 集群读到的厂商/型号/版本信息，可为 NULL。
+ *                 信息会写入桥接端点的 Bridged Device Basic Information 集群。
  */
 void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
                                           uint16_t short_addr, uint8_t endpoint,
-                                          const esp_zb_ieee_addr_t ieee_addr);
+                                          const esp_zb_ieee_addr_t ieee_addr,
+                                          const device_identity_t *identity);
 
 /**
  * @brief 上报传感器数据到 Matter

@@ -18,6 +18,7 @@
  */
 
 #include "wifi_manager.h"
+#include "zb_device_ota.h"
 #include <esp_log.h>
 #include <esp_wifi.h>
 
@@ -42,6 +43,10 @@ void wifi_manager_handle_chip_event(const void *event, intptr_t arg)
     switch (chip_event->Type) {
     case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
         ESP_LOGI(TAG, "Interface IP Address Changed");
+        /* HA 经局域网 HTTP 上传子设备 OTA 包 */
+        if (zb_device_ota_http_start() != ESP_OK) {
+            ESP_LOGW(TAG, "zb_device_ota HTTP start deferred/failed");
+        }
         break;
 
     case chip::DeviceLayer::DeviceEventType::kWiFiConnectivityChange:

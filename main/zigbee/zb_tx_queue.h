@@ -18,6 +18,7 @@ void zb_tx_move_to_color(uint16_t short_addr, uint8_t endpoint, uint16_t x, uint
 void zb_tx_move_to_hue_sat(uint16_t short_addr, uint8_t endpoint, uint8_t hue, uint8_t sat);
 void zb_tx_move_to_color_temp(uint16_t short_addr, uint8_t endpoint, uint16_t mireds);
 void zb_tx_write_u16(uint16_t short_addr, uint8_t endpoint, uint16_t cluster, uint16_t attr, uint16_t value);
+void zb_tx_write_u8(uint16_t short_addr, uint8_t endpoint, uint16_t cluster, uint16_t attr, uint8_t value);
 void zb_tx_config_report(uint16_t short_addr, uint8_t endpoint, uint16_t cluster, uint16_t attr,
                          uint8_t attr_type, uint16_t change, uint16_t min_interval, uint16_t max_interval);
 void zb_tx_bind(uint16_t short_addr, uint8_t endpoint, uint16_t cluster, const esp_zb_ieee_addr_t src_ieee);

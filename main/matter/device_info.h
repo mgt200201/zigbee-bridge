@@ -60,6 +60,26 @@ extern "C" {
 #define MAX_NAME_LEN           32
 
 /**
+ * @brief 日期代码属性最大长度
+ */
+#define MAX_DATE_CODE_LEN      16
+
+/**
+ * @brief Zigbee 设备标识信息（Basic 集群读取结果）
+ *
+ * 由 zdp_discovery 解析 Read Attributes 响应后填充，透传给 bridge_manager，
+ * 最终写入 Matter 桥接端点的 Bridged Device Basic Information 集群 (0x0039)。
+ */
+typedef struct {
+    char manufacturer[MAX_NAME_LEN];        /**< Manufacturer Name (0x0004) */
+    char model[MAX_NAME_LEN];               /**< Model Identifier (0x0005) */
+    char sw_version[MAX_DATE_CODE_LEN];     /**< SW Build ID (0x4000) */
+    char date_code[MAX_DATE_CODE_LEN];      /**< Date Code (0x0006) */
+    uint8_t app_version;                    /**< Application Version (0x0001) */
+    uint8_t hw_version;                     /**< Hardware Version (0x0003) */
+} device_identity_t;
+
+/**
  * @brief 设备信息结构体
  *
  * 存储一个 Zigbee 设备的核心信息，用于桥接到 Matter。
@@ -78,7 +98,10 @@ typedef struct {
     esp_zb_ieee_addr_t ieee_addr;           /**< IEEE 64位地址 (唯一标识硬件) */
     char manufacturer[MAX_NAME_LEN];        /**< 制造商名称（不持久化） */
     char model[MAX_NAME_LEN];               /**< 型号标识（不持久化） */
-    char sw_version[16];                    /**< 软件版本（不持久化） */
+    char sw_version[MAX_DATE_CODE_LEN];     /**< 软件版本 SWBuildID（不持久化） */
+    char date_code[MAX_DATE_CODE_LEN];      /**< 日期代码（不持久化） */
+    uint8_t app_version;                    /**< 应用版本号（不持久化） */
+    uint8_t hw_version;                     /**< 硬件版本号（不持久化） */
     bool in_use;                            /**< 该条目是否有效 */
 } device_info_t;
 
@@ -140,6 +163,16 @@ device_info_t *device_info_register(uint32_t device_id, uint16_t uiid,
  */
 void device_info_update_online(uint32_t device_id, uint16_t short_addr,
                                 uint8_t zigbee_endpoint, const esp_zb_ieee_addr_t ieee_addr);
+
+/**
+ * @brief 更新设备标识信息（制造商/型号/版本等）
+ *
+ * 在 Basic 集群属性读取完成后调用，记录非持久化的标识信息。
+ *
+ * @param device_id 设备ID
+ * @param identity  标识信息（为空指针则忽略）
+ */
+void device_info_set_identity(uint32_t device_id, const device_identity_t *identity);
 
 /**
  * @brief 根据短地址设置设备离线

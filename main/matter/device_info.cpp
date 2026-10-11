@@ -140,6 +140,9 @@ void device_info_init(void)
                         dev->manufacturer[0] = '\0';
                         dev->model[0] = '\0';
                         dev->sw_version[0] = '\0';
+                        dev->date_code[0] = '\0';
+                        dev->app_version = 0;
+                        dev->hw_version = 0;
                         restored_count++;
                         ESP_LOGI(TAG, "Restored device: device_id=0x%08X, uiid=0x%04X", (unsigned int)device_id, uiid);
                     } else {
@@ -233,6 +236,9 @@ device_info_t *device_info_register(uint32_t device_id, uint16_t uiid,
     dev->manufacturer[0] = '\0';
     dev->model[0] = '\0';
     dev->sw_version[0] = '\0';
+    dev->date_code[0] = '\0';
+    dev->app_version = 0;
+    dev->hw_version = 0;
 
     /* 持久化到 NVS */
     nvs_handle_t handle;
@@ -284,6 +290,28 @@ void device_info_update_online(uint32_t device_id, uint16_t short_addr,
 
     ESP_LOGI(TAG, "Device 0x%08X online: short_addr=0x%04hx, ep=%d",
              (unsigned int)device_id, dev->short_addr, dev->zigbee_endpoint);
+}
+
+void device_info_set_identity(uint32_t device_id, const device_identity_t *identity)
+{
+    MutexGuard guard;
+    if (!identity) {
+        return;
+    }
+    device_info_t *dev = device_info_find_by_device_id(device_id);
+    if (!dev) {
+        ESP_LOGW(TAG, "Cannot set identity: device_id=0x%08X not found", (unsigned int)device_id);
+        return;
+    }
+    snprintf(dev->manufacturer, sizeof(dev->manufacturer), "%s", identity->manufacturer);
+    snprintf(dev->model, sizeof(dev->model), "%s", identity->model);
+    snprintf(dev->sw_version, sizeof(dev->sw_version), "%s", identity->sw_version);
+    snprintf(dev->date_code, sizeof(dev->date_code), "%s", identity->date_code);
+    dev->app_version = identity->app_version;
+    dev->hw_version = identity->hw_version;
+    ESP_LOGI(TAG, "Device 0x%08X identity: mfr=%s model=%s sw=%s app=%u hw=%u",
+             (unsigned int)device_id, dev->manufacturer, dev->model, dev->sw_version,
+             dev->app_version, dev->hw_version);
 }
 
 void device_info_set_offline(uint16_t short_addr)
