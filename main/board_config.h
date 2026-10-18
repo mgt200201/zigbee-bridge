@@ -24,6 +24,14 @@
 #define STEERING_LED_POLARITY    false   /* false=高电平点亮, true=低电平点亮 */
 #define STEERING_BLINK_MS        500     /* 入网窗口闪烁间隔(ms) */
 
+/* ---- External RTC RX8025T-UB (I2C master, 7-bit addr 0x32) ----
+ * 板级实际走线（见原理图 "RTC时钟"）：SCL = S3 IO13, SDA = S3 IO14。
+ * 板上已有 R5/R7 10K 上拉至 VDD3V3；INT# 经 R8 10K 上拉至 VDD3V3_BAT，未接 MCU。
+ * 若将来改板只需要改这两个宏。 */
+#define RTC_I2C_SCL_GPIO         GPIO_NUM_13
+#define RTC_I2C_SDA_GPIO         GPIO_NUM_14
+#define RTC_I2C_SPEED_HZ         100000   /* 100kHz */
+
 /* ---- ESP32-H2 RCP 控制脚（与 Kconfig PIN_TO_RCP_* 一致） ----
  * 平时：EN=高、BOOT=高 → H2 正常跑固件
  * OTA：serial-flasher 先拉低 BOOT，再脉冲 EN，进 UART 下载模式

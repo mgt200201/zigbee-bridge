@@ -61,6 +61,7 @@
 #include <commissioning_mgr.h>
 #include <button.h>
 #include <led.h>
+#include <rtc_rx8025t.h>
 #include <app/server/Server.h>
 #include <transport/Session.h>
 #include <transport/SecureSession.h>
@@ -230,6 +231,46 @@ static void gateway_erase_bridge_nvs(void)
 
 } /* namespace */
 
+/* ==================== RTC 定时读数诊断（测试用，可整块裁剪） ====================
+ * 每 10s 从外部 RTC(RX8025T) 读取时间并打印，用于验证走时/校时是否正确。
+ * 不需要时：把 RTC_TIME_DIAG_ENABLE 改成 0，或直接删除本块（含 app_main 内的启动处）。 */
+#define RTC_TIME_DIAG_ENABLE        1
+#if RTC_TIME_DIAG_ENABLE
+#define RTC_TIME_DIAG_PERIOD_MS     10000
+/* 以编译年份为基准判断 RTC 是否"看起来合理"：RX8025T 从未被校时时寄存器为上电随机值，
+ * 实测会落在固定区间之内（读到过 2088），所以不能只用 2020~2099 这种宽区间。 */
+#define RTC_BUILD_YEAR          ((__DATE__[7]-'0')*1000 + (__DATE__[8]-'0')*100 \
+                                + (__DATE__[9]-'0')*10 + (__DATE__[10]-'0'))
+#define RTC_TIME_VALID_YEAR_MIN     (RTC_BUILD_YEAR - 1)
+#define RTC_TIME_VALID_YEAR_MAX     (RTC_BUILD_YEAR + 20)
+
+#include <time.h>
+
+static void rtc_time_diag_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        struct tm t = {0};
+        if (rtc_rx8025t_get_time(&t) == ESP_OK) {
+            int year = t.tm_year + 1900;
+            if (year < RTC_TIME_VALID_YEAR_MIN || year > RTC_TIME_VALID_YEAR_MAX) {
+                /* 联网 SNTP 校时成功前，RTC 读数无意义，明确标注避免误判 */
+                ESP_LOGW(TAG, "RTC not calibrated yet (raw %04d-%02d-%02d %02d:%02d:%02d)",
+                         year, t.tm_mon + 1, t.tm_mday,
+                         t.tm_hour, t.tm_min, t.tm_sec);
+            } else {
+                ESP_LOGI(TAG, "RTC now: %04d-%02d-%02d %02d:%02d:%02d (wday=%d)",
+                         year, t.tm_mon + 1, t.tm_mday,
+                         t.tm_hour, t.tm_min, t.tm_sec, t.tm_wday);
+            }
+        } else {
+            ESP_LOGW(TAG, "RTC read failed");
+        }
+        vTaskDelay(pdMS_TO_TICKS(RTC_TIME_DIAG_PERIOD_MS));
+    }
+}
+#endif /* RTC_TIME_DIAG_ENABLE */
+
 /* ==================== 主函数 ==================== */
 
 extern "C" void app_main(void)
@@ -334,6 +375,18 @@ extern "C" void app_main(void)
     s_steering_led = led_create(STEERING_LED_GPIO, STEERING_LED_POLARITY);
     status_led_refresh();         /* 刚上电：状态灯 100ms 亮/400ms 灭 */
     ESP_LOGI(TAG, "Peripherals initialized");
+
+    /* External RTC RX8025T (I2C). Failure is non-fatal: only affects
+     * time keeping across power loss; wall-clock is calibrated after WiFi. */
+    if (rtc_rx8025t_init(RTC_I2C_SCL_GPIO, RTC_I2C_SDA_GPIO, RTC_I2C_SPEED_HZ) == ESP_OK) {
+        ESP_LOGI(TAG, "RX8025T RTC ready");
+#if RTC_TIME_DIAG_ENABLE
+        /* 测试用：每 10s 打印一次 RTC 读数（裁剪时连同上面的块一起删） */
+        xTaskCreate(rtc_time_diag_task, "rtc_time_diag", 3072, NULL, 4, NULL);
+#endif
+    } else {
+        ESP_LOGW(TAG, "RX8025T RTC init failed (external RTC absent?)");
+    }
 
     /* ---- 第 2 层：Matter 协议栈初始化 ---- */
     device_info_init();

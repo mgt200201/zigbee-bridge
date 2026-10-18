@@ -27,6 +27,11 @@ CONFIG_FREERTOS_ENABLE_BACKWARD_COMPATIBILITY=y
 # Enable lwip ipv6 autoconfig
 CONFIG_LWIP_IPV6_AUTOCONFIG=y
 
+# Accept DNS servers announced by IPv6 routers (RDNSS). Pure-IPv6 hotspots
+# provide DNS only this way; with 0 the stack has no DNS and NTP/SNTP cannot
+# even resolve its server name.
+CONFIG_LWIP_IPV6_RDNSS_MAX_DNS_SERVERS=2
+
 # Use a custom partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
