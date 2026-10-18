@@ -23,6 +23,7 @@ void zb_tx_config_report(uint16_t short_addr, uint8_t endpoint, uint16_t cluster
                          uint8_t attr_type, uint16_t change, uint16_t min_interval, uint16_t max_interval);
 void zb_tx_bind(uint16_t short_addr, uint8_t endpoint, uint16_t cluster, const esp_zb_ieee_addr_t src_ieee);
 void zb_tx_read_basic(uint16_t short_addr, uint8_t endpoint);
+void zb_tx_read_color_mode(uint16_t short_addr, uint8_t endpoint);
 void zb_tx_simple_desc(uint16_t short_addr, uint8_t endpoint);
 
 #ifdef __cplusplus

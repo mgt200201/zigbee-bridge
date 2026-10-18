@@ -61,6 +61,17 @@ esp_zb_core_action_callback_t zdp_discovery_get_action_handler(void);
 void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint);
 
 /**
+ * @brief 读取彩色灯的 ColorMode/EnhancedColorMode（0x0300 集群 0x0008/0x4001）
+ *
+ * 子设备受 ZBOSS 限制无法主动上报 ColorMode，只能由网关读取校准：
+ * 结果经 color handler 的读属性响应回调写入 Matter 端。
+ *
+ * @param short_addr 子设备短地址
+ * @param endpoint   子设备端点号
+ */
+void zdp_discovery_read_color_mode(uint16_t short_addr, uint8_t endpoint);
+
+/**
  * @brief 温湿度传感器入网后主动配置属性上报
  *
  * 当设备 uiid 识别为 UIID_TEMP_HUMIDITY_SENSOR (0x0001) 时调用，

@@ -134,6 +134,17 @@ static esp_err_t color_report_attr(const esp_zb_zcl_report_attr_message_t *msg)
         }
         break;
 
+    case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID:
+    case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_COLOR_MODE_ID:
+        {
+            uint8_t mode = COLOR_VAL_U8();
+            ESP_LOGI(TAG, "0x%04x ep=%d: color_mode=0x%02x", short_addr, msg->src_endpoint, mode);
+            if (api && api->report_color_mode) {
+                api->report_color_mode(short_addr, msg->src_endpoint, mode);
+            }
+        }
+        break;
+
     default:
         zcl_metrics_record_error(ZCL_ERR_SEVERITY_PERMANENT, TAG,
                                   "0x%04x: unhandled attr 0x%04x", short_addr, msg->attribute.id);
@@ -146,8 +157,47 @@ static esp_err_t color_report_attr(const esp_zb_zcl_report_attr_message_t *msg)
     return ESP_OK;
 }
 
+/* ==================== 读属性响应 ====================
+ * ColorMode 无法通过 Report Attributes 上报（ZBOSS 会对该属性断言），
+ * 因此由网关主动读取校准：把结果写入 Matter 端，覆盖此前的推断值。 */
+static esp_err_t color_read_attr_resp(const esp_zb_zcl_cmd_read_attr_resp_message_t *msg)
+{
+    if (!msg) {
+        return ESP_FAIL;
+    }
+    uint16_t short_addr = msg->info.src_address.u.short_addr;
+    if (short_addr == 0xFFFF) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    const zcl_bridge_api_t *api = zcl_bridge_api_get();
+
+    for (esp_zb_zcl_read_attr_resp_variable_t *var = msg->variables; var; var = var->next) {
+        bool ok = (var->status == ESP_ZB_ZCL_STATUS_SUCCESS)
+                  && (var->attribute.data.value != NULL)
+                  && (var->attribute.data.size >= 1);
+        if (!ok) {
+            ESP_LOGW(TAG, "0x%04x: read attr 0x%04x status=0x%02x", short_addr,
+                     var->attribute.id, var->status);
+            continue;
+        }
+        if (var->attribute.id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID
+            || var->attribute.id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_COLOR_MODE_ID) {
+            uint8_t mode = *(uint8_t *)var->attribute.data.value;
+            ESP_LOGI(TAG, "0x%04x ep=%d: attr 0x%04x color_mode=0x%02x",
+                     short_addr, msg->info.src_endpoint, var->attribute.id, mode);
+            if (api && api->report_color_mode) {
+                api->report_color_mode(short_addr, msg->info.src_endpoint, mode);
+            }
+        }
+    }
+
+    return ESP_OK;
+}
+
 const zcl_device_handler_t color_control_handler = {
     .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
     .name = "color_control",
     .on_report_attr = color_report_attr,
+    .on_read_attr_resp = color_read_attr_resp,
 };

@@ -669,6 +669,12 @@ void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint)
     zb_tx_read_basic(short_addr, endpoint);
 }
 
+void zdp_discovery_read_color_mode(uint16_t short_addr, uint8_t endpoint)
+{
+    ESP_LOGI(TAG, "Reading ColorMode from device 0x%04x, endpoint=%d", short_addr, endpoint);
+    zb_tx_read_color_mode(short_addr, endpoint);
+}
+
 /* ==================== 初始化 ==================== */
 
 void zdp_discovery_init(void)

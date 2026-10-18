@@ -58,6 +58,10 @@ typedef struct {
     /** 上报色温（0x0300 ColorTemperature=0x0007, 单位 mireds） */
     void (*report_color_temperature)(uint16_t short_addr, uint8_t endpoint, uint16_t mireds);
 
+    /** 上报颜色模式（0x0300 ColorMode=0x0008：0=HS, 1=XY, 2=CT）
+     *  控制器/HA 靠它决定用哪一组颜色属性渲染，必须与子设备保持一致 */
+    void (*report_color_mode)(uint16_t short_addr, uint8_t endpoint, uint8_t mode);
+
     /** 查询设备是否已创建 Matter 桥接 */
     bool (*is_device_bridged)(uint16_t short_addr);
 

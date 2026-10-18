@@ -330,6 +330,21 @@ static void bridge_api_report_level(uint16_t short_addr, uint8_t endpoint, uint8
     }
 }
 
+/* 把颜色模式同步到 Matter 端（0x0300 ColorMode / EnhancedColorMode）。
+ *
+ * 控制器(HA)按 ColorMode 决定渲染哪一组颜色属性；Matter 端默认是 XY(1)。
+ * 子设备受 ZBOSS 限制无法主动上报 ColorMode，只能在上报颜色属性时由网关推断，
+ * 另在设备入网/重连后主动读一次校准。
+ * Zigbee 与 Matter 的取值一致：0=HS, 1=XY, 2=CT。 */
+static void bridge_set_color_mode(uint16_t matter_ep, uint8_t mode)
+{
+    esp_matter_attr_val_t val = esp_matter_enum8(mode);
+    bridge_set_attr_no_echo(matter_ep, ColorControl::Id,
+                            ColorControl::Attributes::ColorMode::Id, &val);
+    bridge_set_attr_no_echo(matter_ep, ColorControl::Id,
+                            ColorControl::Attributes::EnhancedColorMode::Id, &val);
+}
+
 static void bridge_api_report_color_xy(uint16_t short_addr, uint8_t endpoint, uint16_t x, uint16_t y)
 {
     app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
@@ -355,16 +370,26 @@ static void bridge_api_report_color_hsv(uint16_t short_addr, uint8_t endpoint, u
         return;
     }
     uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
-    esp_matter_attr_val_t vh = esp_matter_nullable_uint8(hue);
-    esp_matter_attr_val_t vs = esp_matter_nullable_uint8(sat);
+    /* CurrentHue/CurrentSaturation 是非可空 uint8（create_current_hue 用 esp_matter_uint8），
+     * 传可空值会因类型不匹配报 ESP_ERR_INVALID_ARG(258)，与 CurrentX/Y 同理。 */
+    esp_matter_attr_val_t vh = esp_matter_uint8(hue);
+    esp_matter_attr_val_t vs = esp_matter_uint8(sat);
     esp_err_t e1 = bridge_set_attr_no_echo(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentHue::Id, &vh);
     esp_err_t e2 = bridge_set_attr_no_echo(matter_ep, ColorControl::Id, ColorControl::Attributes::CurrentSaturation::Id, &vs);
     if (e1 != ESP_OK) ESP_LOGE(TAG, "Hue update failed on ep %d: %s", matter_ep, esp_err_to_name(e1));
     if (e2 != ESP_OK) ESP_LOGE(TAG, "Sat update failed on ep %d: %s", matter_ep, esp_err_to_name(e2));
+    /* 子设备报了 HSV，说明颜色由 HS 决定（此时 X/Y 往往只是过期近似值） */
+    bridge_set_color_mode(matter_ep, 0);
 }
 
 static void bridge_api_report_color_temperature(uint16_t short_addr, uint8_t endpoint, uint16_t mireds)
 {
+    /* 0xFFFF/0xFEFF 是 ZCL 约定的"色温无效"标记，不能当真实色温写入，
+     * 否则 HA 会显示一个极端色温，颜色模式也会被误判成 CT。 */
+    if (mireds == 0xFFFF || mireds >= 0xFEFF) {
+        ESP_LOGD(TAG, "Ignore invalid color temperature %u from 0x%04x", mireds, short_addr);
+        return;
+    }
     app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
     if (!dev || !dev->dev || !dev->dev->endpoint) {
         ESP_LOGW(TAG, "Cannot report ColorTemperature: no bridge for 0x%04x", short_addr);
@@ -377,6 +402,18 @@ static void bridge_api_report_color_temperature(uint16_t short_addr, uint8_t end
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ColorTemperature update failed on ep %d: %s", matter_ep, esp_err_to_name(err));
     }
+    bridge_set_color_mode(matter_ep, 2);
+}
+
+/** 读取响应的 ColorMode 校准结果，覆盖推断值。 */
+static void bridge_api_report_color_mode(uint16_t short_addr, uint8_t endpoint, uint8_t mode)
+{
+    app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+    if (!dev || !dev->dev || !dev->dev->endpoint) {
+        ESP_LOGW(TAG, "Cannot report ColorMode: no bridge for 0x%04x", short_addr);
+        return;
+    }
+    bridge_set_color_mode(esp_matter::endpoint::get_id(dev->dev->endpoint), mode);
 }
 
 /** Bridge API 实例（静态全局，在 init 中注册到 ZCL 层） */
@@ -387,6 +424,7 @@ static const zcl_bridge_api_t s_bridge_api_impl = {
     .report_color_xy = bridge_api_report_color_xy,
     .report_color_hsv = bridge_api_report_color_hsv,
     .report_color_temperature = bridge_api_report_color_temperature,
+    .report_color_mode = bridge_api_report_color_mode,
     .is_device_bridged = bridge_api_is_bridged,
     .get_endpoint_by_short = bridge_api_get_ep,
 };
@@ -773,6 +811,11 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
         /* 重配后新建的 Matter 端点初始状态是默认值(off/0)，而设备可能本是开着的。
          * 主动触发设备上报一次真实状态，避免 HA 第一次控制"无效"。 */
         zdp_discovery_request_state_report(short_addr, endpoint);
+
+        /* ColorMode 无法主动上报，跟随状态同步读一次做校准 */
+        if (info->uiid == UIID_RGB_LED) {
+            zdp_discovery_read_color_mode(short_addr, endpoint);
+        }
         return;
     }
 
@@ -812,6 +855,11 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
 
     /* 触发设备上报一次真实状态，让新建的 Matter 端点立即与设备同步。 */
     zdp_discovery_request_state_report(short_addr, endpoint);
+
+    /* ColorMode 无法主动上报，跟随状态同步读一次做校准 */
+    if (uiid == UIID_RGB_LED) {
+        zdp_discovery_read_color_mode(short_addr, endpoint);
+    }
 }
 
 void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,
