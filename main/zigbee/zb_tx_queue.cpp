@@ -22,6 +22,7 @@
 #include <zcl/esp_zigbee_zcl_level.h>
 #include <zcl/esp_zigbee_zcl_color_control.h>
 #include <zcl/esp_zigbee_zcl_basic.h>
+#include <zcl/esp_zigbee_zcl_ota.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -44,6 +45,7 @@ typedef enum {
     ZB_TX_BIND,
     ZB_TX_READ_BASIC,
     ZB_TX_READ_COLOR_MODE,
+    ZB_TX_READ_OTA_VERSION,
     ZB_TX_SIMPLE_DESC,
 } zb_tx_kind_t;
 
@@ -353,6 +355,23 @@ static void dispatch_tx(const zb_tx_item_t *item)
         ESP_LOGI(TAG, "Read ColorMode attrs -> 0x%04x ep=%d seq=%u", item->short_addr, item->endpoint, seq);
         break;
     }
+    case ZB_TX_READ_OTA_VERSION: {
+        /* OTA 集群(0x0019) CurrentFileVersion(0x0002)：子设备当前运行的固件版本 */
+        static const uint16_t attr_list[] = {
+            ESP_ZB_ZCL_ATTR_OTA_UPGRADE_FILE_VERSION_ID,
+        };
+        esp_zb_zcl_read_attr_cmd_t cmd;
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.zcl_basic_cmd = basic;
+        cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+        cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_OTA_UPGRADE;
+        cmd.attr_number = sizeof(attr_list) / sizeof(attr_list[0]);
+        cmd.attr_field = (uint16_t *)attr_list;
+        cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+        uint8_t seq = esp_zb_zcl_read_attr_cmd_req(&cmd);
+        ESP_LOGI(TAG, "Read OTA version -> 0x%04x ep=%d seq=%u", item->short_addr, item->endpoint, seq);
+        break;
+    }
     case ZB_TX_SIMPLE_DESC: {
         esp_zb_zdo_simple_desc_req_param_t req;
         req.addr_of_interest = item->short_addr;
@@ -545,6 +564,16 @@ void zb_tx_read_color_mode(uint16_t short_addr, uint8_t endpoint)
     zb_tx_item_t item;
     memset(&item, 0, sizeof(item));
     item.kind = ZB_TX_READ_COLOR_MODE;
+    item.short_addr = short_addr;
+    item.endpoint = endpoint;
+    enqueue(&item);
+}
+
+void zb_tx_read_ota_version(uint16_t short_addr, uint8_t endpoint)
+{
+    zb_tx_item_t item;
+    memset(&item, 0, sizeof(item));
+    item.kind = ZB_TX_READ_OTA_VERSION;
     item.short_addr = short_addr;
     item.endpoint = endpoint;
     enqueue(&item);

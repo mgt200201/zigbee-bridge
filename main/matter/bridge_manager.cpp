@@ -816,6 +816,9 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
         if (info->uiid == UIID_RGB_LED) {
             zdp_discovery_read_color_mode(short_addr, endpoint);
         }
+
+        /* 每次 rejoin 读一次子设备当前固件版本（OTA 集群 0x0019） */
+        zdp_discovery_read_ota_version(short_addr, endpoint);
         return;
     }
 
@@ -860,6 +863,9 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
     if (uiid == UIID_RGB_LED) {
         zdp_discovery_read_color_mode(short_addr, endpoint);
     }
+
+    /* 入网后读一次子设备当前固件版本（OTA 集群 0x0019） */
+    zdp_discovery_read_ota_version(short_addr, endpoint);
 }
 
 void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,

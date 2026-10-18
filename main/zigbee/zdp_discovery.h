@@ -72,6 +72,17 @@ void zdp_discovery_read_basic_attributes(uint16_t short_addr, uint8_t endpoint);
 void zdp_discovery_read_color_mode(uint16_t short_addr, uint8_t endpoint);
 
 /**
+ * @brief 读取子设备当前运行的固件版本（OTA 集群 0x0019 / 0x0002）
+ *
+ * 入网与 rejoin 时各读一次，结果由 ota handler 的读属性响应回调打印。
+ * 子设备若未实现 OTA client 集群，会返回 UNSUPPORTED_CLUSTER，属正常情况。
+ *
+ * @param short_addr 子设备短地址
+ * @param endpoint   子设备端点号
+ */
+void zdp_discovery_read_ota_version(uint16_t short_addr, uint8_t endpoint);
+
+/**
  * @brief 温湿度传感器入网后主动配置属性上报
  *
  * 当设备 uiid 识别为 UIID_TEMP_HUMIDITY_SENSOR (0x0001) 时调用，
