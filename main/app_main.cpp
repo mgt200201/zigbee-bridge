@@ -21,6 +21,7 @@
  */
 
 #include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
 #include <esp_system.h>
@@ -468,7 +469,7 @@ extern "C" void app_main(void)
     zboss_manager_start();
 
     /* ---- 串口命令监听任务（factoryreset 等） ---- */
-    xTaskCreate([](void *) {
+    BaseType_t serial_task_created = xTaskCreate([](void *) {
         char line[128];
         while (true) {
             if (fgets(line, sizeof(line), stdin)) {
@@ -596,7 +597,10 @@ extern "C" void app_main(void)
             }
             vTaskDelay(pdMS_TO_TICKS(100));
         }
-    }, "serial_cmd", 8192, NULL, 2, NULL);
+    }, "serial_cmd", 4096, NULL, 2, NULL);
+    if (serial_task_created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create serial_cmd task, factoryreset unavailable");
+    }
 
     /* ---- 第 4 层：按键事件路由 ---- */
     button_register_callback([](button_event_t event, void *user_data) {
@@ -612,6 +616,11 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Button callback registered");
 
     ESP_LOGI(TAG, "=== System initialized ===");
+    ESP_LOGI(TAG, "Heap: free=%u internal=%u largest_int=%u psram=%u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     /* 主任务即将退出，从看门狗中移除 */
     watchdog_remove_self();

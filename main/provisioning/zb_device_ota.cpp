@@ -788,8 +788,8 @@ esp_err_t zb_device_ota_http_start(void)
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
     cfg.max_uri_handlers = 8;
-    /* 大包上传：提高栈，避免在 handler 里擦分区时溢出 */
-    cfg.stack_size = 8192;
+    /* 大包上传：适当提高栈，避免在 handler 里擦分区时溢出（内部 RAM 紧张，不宜过大） */
+    cfg.stack_size = 4096;
 
     esp_err_t err = httpd_start(&s_httpd, &cfg);
     if (err != ESP_OK) {
