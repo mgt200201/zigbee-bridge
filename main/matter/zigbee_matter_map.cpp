@@ -35,14 +35,19 @@ static const zigbee_matter_map_entry_t s_sensor_map[] = {
         .matter_attr    = RelativeHumidityMeasurement::Attributes::MeasuredValue::Id,
         .val_type       = ESP_MATTER_VAL_TYPE_NULLABLE_UINT16,
     },
+    {
+        .zigbee_cluster = 0x0400,  /* Illuminance Measurement */
+        .matter_cluster = IlluminanceMeasurement::Id,
+        .matter_attr    = IlluminanceMeasurement::Attributes::MeasuredValue::Id,
+        .val_type       = ESP_MATTER_VAL_TYPE_NULLABLE_UINT16,
+    },
+    {
+        .zigbee_cluster = 0x0406,  /* Occupancy Sensing */
+        .matter_cluster = OccupancySensing::Id,
+        .matter_attr    = OccupancySensing::Attributes::Occupancy::Id,
+        .val_type       = ESP_MATTER_VAL_TYPE_BITMAP8,
+    },
     /* ── 在此添加新传感器类型 ── */
-    /* {
-     *     .zigbee_cluster = 0x0400,  // Illuminance Measurement
-     *     .matter_cluster = IlluminanceMeasurement::Id,
-     *     .matter_attr    = IlluminanceMeasurement::Attributes::MeasuredValue::Id,
-     *     .val_type       = ESP_MATTER_VAL_TYPE_NULLABLE_UINT16,
-     * },
-     */
 };
 
 static const int s_sensor_map_size = sizeof(s_sensor_map) / sizeof(s_sensor_map[0]);

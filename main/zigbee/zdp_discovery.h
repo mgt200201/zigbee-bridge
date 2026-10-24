@@ -96,6 +96,18 @@ void zdp_discovery_read_ota_version(uint16_t short_addr, uint8_t endpoint);
 void zdp_discovery_configure_reporting(uint16_t short_addr, uint8_t endpoint);
 
 /**
+ * @brief 雷达人体存在传感器入网后配置属性上报
+ *
+ * 当设备 uiid 识别为 UIID_RADAR_SENSOR (0x0003) 时调用，每次入网/rejoin 都下发：
+ *   - Occupancy (0x0406/0x0000)：min=0s、max=3600s，离散类型不带变化阈值
+ *   - Illuminance MeasuredValue (0x0400/0x0000)：min=3s、max=3600s、阈值 100
+ *
+ * @param short_addr 目标设备短地址
+ * @param endpoint   目标设备端点号
+ */
+void zdp_discovery_configure_radar_reporting(uint16_t short_addr, uint8_t endpoint);
+
+/**
  * @brief 彩色灯 (uiid 0x0002) 入网后主动配置属性上报
  *
  * 向子设备下发 Configure Reporting，使其主动上报：

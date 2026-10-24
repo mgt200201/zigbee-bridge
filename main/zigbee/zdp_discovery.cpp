@@ -40,6 +40,8 @@
 #include <zcl/esp_zigbee_zcl_on_off.h>
 #include <zcl/esp_zigbee_zcl_level.h>
 #include <zcl/esp_zigbee_zcl_color_control.h>
+#include <zcl/esp_zigbee_zcl_illuminance_meas.h>
+#include <zcl/esp_zigbee_zcl_occupancy_sensing.h>
 #include <nwk/esp_zigbee_nwk.h>
 
 static const char *TAG = "zdp_discovery";
@@ -357,6 +359,23 @@ static void copy_zcl_string(uint8_t *data, uint16_t size, char *dst, size_t dst_
 }
 
 /**
+ * @brief 从 IEEE 地址派生 32 位 deviceId
+ *
+ * 部分型号（如雷达）把 Basic 0x4001 当字符序列号上报，无法作为 deviceId。
+ * IEEE 是硬件唯一且稳定的，用 FNV-1a 折叠成 32 位，重入网/重启后保持一致，
+ * 保证 NVS 里的设备映射不会错乱。
+ */
+static uint32_t derive_device_id_from_ieee(const esp_zb_ieee_addr_t ieee)
+{
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < sizeof(esp_zb_ieee_addr_t); i++) {
+        hash ^= ieee[i];
+        hash *= 16777619u;
+    }
+    return hash ? hash : 1;   /* 0 与无效 deviceId 语义冲突 */
+}
+
+/**
  * @brief 解析 Read Attributes 响应，提取设备标识并桥接到 Matter
  *
  * 从 Basic 集群响应中解析：
@@ -453,10 +472,15 @@ static esp_err_t zb_read_attr_resp_handler(
             break;
 
         case ZB_BASIC_ATTR_DEVICE_ID:
-            if (ok && size >= 4) {
+            /* 部分型号（如雷达）把 0x4001 当字符序列号（ZCL type 0x42）上报，
+             * 按 uint32 解析会得到垃圾 ID，必须校验类型后再取值 */
+            if (ok && var->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U32 && size >= 4) {
                 device_id = *(uint32_t *)var->attribute.data.value;
                 got_device_id = true;
                 ESP_LOGI(TAG, "  deviceId (0x4001): 0x%08lX", (unsigned long)device_id);
+            } else if (ok) {
+                ESP_LOGI(TAG, "  attr 0x4001 is not uint32 deviceId (type=0x%02x), use IEEE-derived",
+                         var->attribute.data.type);
             }
             break;
 
@@ -475,6 +499,15 @@ static esp_err_t zb_read_attr_resp_handler(
 
     /* 设备标识完成 → 桥接到 Matter（含厂商/型号/版本信息） */
     known_device_t *known = zboss_manager_find_by_short(short_addr);
+
+    /* 0x4001 不是 uint32 时（雷达上报的是字符序列号），改用 IEEE 派生，
+     * 既保证能桥接，也保证每次入网得到同一个 deviceId */
+    if (!got_device_id && known) {
+        device_id = derive_device_id_from_ieee(known->ieee_addr);
+        got_device_id = true;
+        ESP_LOGI(TAG, "  deviceId (derived from IEEE): 0x%08lX", (unsigned long)device_id);
+    }
+
     if (got_device_id && device_id != DEVICE_ID_UNKNOWN && device_id != 0) {
         bridge_manager_on_device_identified(device_id, uiid, short_addr, src_endpoint,
                                             known ? known->ieee_addr : NULL, &identity);
@@ -482,8 +515,12 @@ static esp_err_t zb_read_attr_resp_handler(
         ESP_LOGW(TAG, "No valid deviceId found in Read Attr response");
     }
 
-    /* 温湿度/彩色灯仅在首次配网入网时主动配置属性上报；rejoin 不重复下发 */
-    if (s_first_join_pending && uiid == UIID_TEMP_HUMIDITY_SENSOR) {
+    /* 雷达的占用/光照配置每次入网、重连都下发：配置保存在子设备侧，
+     * 子设备复位后会丢失，重下发开销很小。
+     * 温湿度/彩色灯仍只在首次配网时配置，rejoin 不重复下发。 */
+    if (uiid == UIID_RADAR_SENSOR) {
+        zdp_discovery_configure_radar_reporting(short_addr, src_endpoint);
+    } else if (s_first_join_pending && uiid == UIID_TEMP_HUMIDITY_SENSOR) {
         zdp_discovery_configure_reporting(short_addr, src_endpoint);
         s_first_join_pending = false;
     } else if (s_first_join_pending && uiid == UIID_RGB_LED) {
@@ -549,6 +586,33 @@ void zdp_discovery_configure_reporting(uint16_t short_addr, uint8_t endpoint)
                        ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
                        ESP_ZB_ZCL_ATTR_TYPE_U16, TH_REPORT_HUMIDITY_CHANGE,
                        TH_REPORT_MIN_INTERVAL, TH_REPORT_MAX_INTERVAL);
+}
+
+/* ==================== 雷达上报配置 ==================== */
+
+/* 有人/无人属事件型状态：min=0 立即上报，max=3600 兜底；bitmap8 为离散类型，
+   不携带 ReportableChange（否则设备会拒绝整条配置）。
+   光照属连续测量：min=3 抑制抖动，max=3600 兜底，变化阈值按对数刻度取 100。 */
+#define RADAR_OCC_REPORT_MIN_INTERVAL   0
+#define RADAR_REPORT_MAX_INTERVAL       1800
+#define RADAR_LUX_REPORT_MIN_INTERVAL   3
+#define RADAR_LUX_REPORT_CHANGE         10
+
+void zdp_discovery_configure_radar_reporting(uint16_t short_addr, uint8_t endpoint)
+{
+    ESP_LOGI(TAG, "Configuring reporting for radar 0x%04x ep=%d", short_addr, endpoint);
+
+    send_config_report(short_addr, endpoint,
+                       ESP_ZB_ZCL_CLUSTER_ID_OCCUPANCY_SENSING,
+                       ESP_ZB_ZCL_ATTR_OCCUPANCY_SENSING_OCCUPANCY_ID,
+                       ESP_ZB_ZCL_ATTR_TYPE_8BITMAP, 0,
+                       RADAR_OCC_REPORT_MIN_INTERVAL, RADAR_REPORT_MAX_INTERVAL);
+
+    send_config_report(short_addr, endpoint,
+                       ESP_ZB_ZCL_CLUSTER_ID_ILLUMINANCE_MEASUREMENT,
+                       ESP_ZB_ZCL_ATTR_ILLUMINANCE_MEASUREMENT_MEASURED_VALUE_ID,
+                       ESP_ZB_ZCL_ATTR_TYPE_U16, RADAR_LUX_REPORT_CHANGE,
+                       RADAR_LUX_REPORT_MIN_INTERVAL, RADAR_REPORT_MAX_INTERVAL);
 }
 
 /* ==================== 彩色灯上报配置 ==================== */

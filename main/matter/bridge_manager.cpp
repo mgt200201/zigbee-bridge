@@ -545,9 +545,37 @@ esp_err_t bridge_manager_create_devices_cb(esp_matter::endpoint_t *ep, uint32_t 
         }
         break;
     }
+    case ESP_MATTER_OCCUPANCY_SENSOR_DEVICE_TYPE_ID: {
+        /* 24GHz 雷达人体存在传感器：
+         *   - OccupancySensing (0x0406)：有人/无人
+         *   - IlluminanceMeasurement (0x0400)：光照测量值（雷达附带）
+         * 与彩灯同理，用设备类型 API add() 把 OccupancySensor(0x0107) 写进
+         * DeviceTypeList，HA 才会识别为 occupancy 设备。
+         * OccupancySensing 的 FeatureMap 必须至少置一位，否则 create() 会断言失败；
+         * Matter 没有 radar 这种 OccupancySensorType，故 type 仍取 PIR(0)，
+         * feature 按 radar 声明。 */
+        endpoint::occupancy_sensor::config_t occ_conf;
+        occ_conf.occupancy_sensing.occupancy = 0;
+        occ_conf.occupancy_sensing.occupancy_sensor_type = 0;            /* PIR */
+        occ_conf.occupancy_sensing.occupancy_sensor_type_bitmap = 0x01;  /* bit0: PIR */
+        occ_conf.occupancy_sensing.feature_flags = occupancy_sensing::feature::radar::get_id();
+        esp_err_t err = endpoint::occupancy_sensor::add(ep, &occ_conf);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add occupancy_sensor: %s", esp_err_to_name(err));
+            return err;
+        }
+
+        /* 光照没有独立设备类型，作为附加集群挂在同一端点 */
+        illuminance_measurement::config_t lux_conf;
+        lux_conf.measured_value = { static_cast<uint16_t>(0) };
+        lux_conf.min_measured_value = { static_cast<uint16_t>(1) };
+        lux_conf.max_measured_value = { static_cast<uint16_t>(0xFFFE) };
+        illuminance_measurement::create(ep, &lux_conf, CLUSTER_FLAG_SERVER);
+        break;
+    }
     default:
         ESP_LOGE(TAG, "Unsupported bridged matter device type: 0x%04x", (unsigned int)device_type_id);
-            return ESP_ERR_INVALID_ARG;
+        return ESP_ERR_INVALID_ARG;
     }
     return ESP_OK;
 }
@@ -624,6 +652,9 @@ static uint32_t uiid_to_matter_device_type_id(uint16_t uiid)
     switch (uiid) {
     case UIID_RGB_LED:
         return ESP_MATTER_EXTENDED_COLOR_LIGHT_DEVICE_TYPE_ID;
+    case UIID_RADAR_SENSOR:
+        /* 雷达人体存在传感器：Matter 用 OccupancySensing 承载"有人/无人" */
+        return ESP_MATTER_OCCUPANCY_SENSOR_DEVICE_TYPE_ID;
     case UIID_TEMP_HUMIDITY_SENSOR:
     default:
         /* 未知型号按温湿度传感器兜底 */
@@ -891,6 +922,8 @@ void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,
         val.val.i16 = raw_value;
     } else if (entry->val_type == ESP_MATTER_VAL_TYPE_NULLABLE_UINT16) {
         val.val.u16 = (uint16_t)raw_value;
+    } else if (entry->val_type == ESP_MATTER_VAL_TYPE_BITMAP8) {
+        val.val.u8 = (uint8_t)raw_value;
     }
 
     esp_err_t err = bridge_set_attr_no_echo(matter_ep, entry->matter_cluster, entry->matter_attr, &val);

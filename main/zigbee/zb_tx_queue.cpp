@@ -270,7 +270,16 @@ static void dispatch_tx(const zb_tx_item_t *item)
         void *change = NULL;
         if (item->attr_type == ESP_ZB_ZCL_ATTR_TYPE_U16 || item->attr_type == ESP_ZB_ZCL_ATTR_TYPE_S16) {
             change = &change16;
-        } else if (item->attr_type != ESP_ZB_ZCL_ATTR_TYPE_BOOL && item->attr_type != 0x30) {
+        } else if (item->attr_type == ESP_ZB_ZCL_ATTR_TYPE_BOOL ||
+                   item->attr_type == ESP_ZB_ZCL_ATTR_TYPE_8BITMAP ||
+                   item->attr_type == ESP_ZB_ZCL_ATTR_TYPE_16BITMAP ||
+                   item->attr_type == ESP_ZB_ZCL_ATTR_TYPE_32BITMAP ||
+                   item->attr_type == ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM ||
+                   item->attr_type == ESP_ZB_ZCL_ATTR_TYPE_16BIT_ENUM) {
+            /* 离散类型（bool/enum/bitmap）的 Configure Reporting 不带 ReportableChange，
+             * 带上该字段会被设备判为格式错误并拒绝整条记录 */
+            change = NULL;
+        } else {
             change = &change8;
         }
         esp_zb_zcl_config_report_record_t record;

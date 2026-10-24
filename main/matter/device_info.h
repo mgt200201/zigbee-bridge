@@ -54,6 +54,12 @@ extern "C" {
 #define UIID_RGB_LED                0x0002
 
 /**
+ * @def UIID_RADAR_SENSOR
+ * @brief 24GHz 毫米波雷达人体存在传感器 uiid（RADAR-01 型号映射，见 device_info_lookup_uiid）
+ */
+#define UIID_RADAR_SENSOR           0x0003
+
+/**
  * @def MAX_NAME_LEN
  * @brief 制造商/型号字符串最大长度
  */
