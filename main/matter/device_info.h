@@ -92,7 +92,7 @@ typedef struct {
  * - deviceId 来自 Basic cluster 属性 0x4001
  * - uiid 根据 Model Identifier 映射得到（不读 0x4002）
  * - deviceId 和 uiid 会持久化到 NVS，网关重启后可恢复
- * - 制造商、型号、软件版本等非关键信息不持久化
+ * - 制造商、型号、版本等标识信息同样持久化，用于重启后回填 Matter 端点属性
  */
 typedef struct {
     uint32_t device_id;                     /**< 设备ID (Basic 0x4001)，DEVICE_ID_UNKNOWN 表示未获取 */
@@ -102,12 +102,12 @@ typedef struct {
     uint8_t zigbee_endpoint;                /**< Zigbee 端点号 */
     uint16_t matter_endpoint_id;            /**< Matter 桥接端点 ID */
     esp_zb_ieee_addr_t ieee_addr;           /**< IEEE 64位地址 (唯一标识硬件) */
-    char manufacturer[MAX_NAME_LEN];        /**< 制造商名称（不持久化） */
-    char model[MAX_NAME_LEN];               /**< 型号标识（不持久化） */
-    char sw_version[MAX_DATE_CODE_LEN];     /**< 软件版本 SWBuildID（不持久化） */
-    char date_code[MAX_DATE_CODE_LEN];      /**< 日期代码（不持久化） */
-    uint8_t app_version;                    /**< 应用版本号（不持久化） */
-    uint8_t hw_version;                     /**< 硬件版本号（不持久化） */
+    char manufacturer[MAX_NAME_LEN];        /**< 制造商名称（持久化） */
+    char model[MAX_NAME_LEN];               /**< 型号标识（持久化） */
+    char sw_version[MAX_DATE_CODE_LEN];     /**< 软件版本 SWBuildID（持久化） */
+    char date_code[MAX_DATE_CODE_LEN];      /**< 日期代码（持久化） */
+    uint8_t app_version;                    /**< 应用版本号（持久化） */
+    uint8_t hw_version;                     /**< 硬件版本号（持久化） */
     bool in_use;                            /**< 该条目是否有效 */
 } device_info_t;
 
@@ -173,7 +173,8 @@ void device_info_update_online(uint32_t device_id, uint16_t short_addr,
 /**
  * @brief 更新设备标识信息（制造商/型号/版本等）
  *
- * 在 Basic 集群属性读取完成后调用，记录非持久化的标识信息。
+ * 在 Basic 集群属性读取完成后调用，记录并持久化标识信息。
+ * 仅覆盖本次读到非空的字段，避免部分读取失败时清空已知型号。
  *
  * @param device_id 设备ID
  * @param identity  标识信息（为空指针则忽略）

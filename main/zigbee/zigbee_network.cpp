@@ -63,6 +63,29 @@ bool zigbee_net_steering_expired(void)
 
 /* ==================== Steering 控制 ==================== */
 
+/* 在 ZBOSS 任务上下文执行：真正打开入网许可（permit join） */
+static void zb_open_network_cb(uint8_t duration_sec)
+{
+    esp_err_t err = esp_zb_bdb_open_network(duration_sec);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Open network (%u s) failed: %s", duration_sec, esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Network opened for %u s (permit join on)", duration_sec);
+    }
+}
+
+/* 在 ZBOSS 任务上下文执行：真正关闭入网许可 */
+static void zb_close_network_cb(uint8_t param)
+{
+    (void)param;
+    esp_err_t err = esp_zb_bdb_close_network();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Close network failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Network closed (permit join off)");
+    }
+}
+
 void zigbee_net_start_steering(void)
 {
     if (!s_formed) {
@@ -80,6 +103,8 @@ void zigbee_net_start_steering(void)
     esp_zb_scheduler_alarm(
         (esp_zb_callback_t)esp_zb_bdb_start_top_level_commissioning,
         ESP_ZB_BDB_MODE_NETWORK_STEERING, 0);
+    /* 显式开放入网，时长与软件窗口一致（仅靠 steering 无法精确控制时长） */
+    esp_zb_scheduler_alarm((esp_zb_callback_t)zb_open_network_cb, STEERING_DURATION_SEC, 0);
 }
 
 void zigbee_net_stop_steering(void)
@@ -94,6 +119,10 @@ void zigbee_net_stop_steering(void)
     if (s_steering_cb) {
         s_steering_cb(false);
     }
+
+    /* 只改标志位不会关掉 ZBOSS 的 permit join，必须显式关闭网络，
+     * 否则窗口"关闭"后新设备仍能在剩余时长内入网。 */
+    esp_zb_scheduler_alarm((esp_zb_callback_t)zb_close_network_cb, 0, 0);
 }
 
 void zigbee_net_handle_button(void)
@@ -137,8 +166,13 @@ static void steering_timer_cb(void *arg)
 void zigbee_net_set_formed(bool formed)
 {
     s_formed = formed;
-    if (formed && s_ready_cb) {
-        s_ready_cb(); /* 协调器网络组建成功 → 通知系统就绪 */
+    if (formed) {
+        /* 建网/重启后 ZBOSS 默认会开放 permit join 一段时间。
+         * 这里主动关掉，保证只有用户短按开窗时才允许新设备入网。 */
+        esp_zb_scheduler_alarm((esp_zb_callback_t)zb_close_network_cb, 0, 1000);
+        if (s_ready_cb) {
+            s_ready_cb(); /* 协调器网络组建成功 → 通知系统就绪 */
+        }
     }
 }
 

@@ -36,7 +36,7 @@ extern "C" {
 #endif
 
 #ifndef BUILD_VERSION
-#define BUILD_VERSION    "1.0.0"
+#define BUILD_VERSION    "1.3.3"
 #endif
 
 /**

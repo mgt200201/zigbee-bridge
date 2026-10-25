@@ -94,6 +94,14 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
                                           const device_identity_t *identity);
 
 /**
+ * @brief 用 device_info 中持久化的标识信息回填所有桥接端点属性
+ *
+ * 网关重启后桥接端点从 NVS 恢复，但 ProductName/NodeLabel 等属性不会自动恢复，
+ * 会导致 HA 里设备名变成默认值。在 app_bridge_initialize() 之后调用一次即可。
+ */
+void bridge_manager_restore_identities(void);
+
+/**
  * @brief 上报传感器数据到 Matter
  */
 void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,

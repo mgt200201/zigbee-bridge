@@ -44,6 +44,7 @@
 #include <common_macros.h>
 #include <esp_timer.h>
 
+#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "bridge_manager";
@@ -57,6 +58,24 @@ static uint16_t s_aggregator_ep_id = chip::kInvalidEndpointId;
 
 /* Zigbee 栈就绪标志：esp_zb_init() 之前为 false。 */
 static volatile bool s_zb_stack_ready = false;
+
+/* 创建桥接端点时暂存的标识信息：在 create 回调里就写入 NodeLabel/ProductName，
+ * 保证 HA 收到 PartsList 变更后第一次 interview 就能读到名字，
+ * 不会出现"先建实体为 ExtendedColorLight、再改名"的竞态。 */
+static device_identity_t s_pending_identity;
+static bool s_pending_identity_valid = false;
+
+static void bridge_apply_identity(uint16_t matter_ep, const device_identity_t *identity);
+
+static void bridge_set_pending_identity(const device_identity_t *identity)
+{
+    if (identity && identity->model[0] != '\0') {
+        s_pending_identity = *identity;
+        s_pending_identity_valid = true;
+    } else {
+        s_pending_identity_valid = false;
+    }
+}
 
 /* 开关与亮度解耦：开/关只发 OnOff；关着时不发 MoveToLevel。
  * level<=1 为 Matter 关灯地板值，一律不下发（避免关灯过程点到 1%）。 */
@@ -577,6 +596,12 @@ esp_err_t bridge_manager_create_devices_cb(esp_matter::endpoint_t *ep, uint32_t 
         ESP_LOGE(TAG, "Unsupported bridged matter device type: 0x%04x", (unsigned int)device_type_id);
         return ESP_ERR_INVALID_ARG;
     }
+
+    /* 端点刚创建、尚未通知 HA 时就把名字写上，避免 HA 先用设备类型名建实体 */
+    if (s_pending_identity_valid) {
+        bridge_apply_identity(endpoint::get_id(ep), &s_pending_identity);
+    }
+
     return ESP_OK;
 }
 
@@ -722,6 +747,37 @@ static void bridge_basic_set_u32(cluster_t *cluster, uint16_t ep, uint32_t attr_
     }
 }
 
+/* NodeLabel 在 HA 里的优先级高于 ProductName，且 esp-matter 把它标记为 NONVOLATILE，
+ * 用它承载子设备名，保证 HA 里始终显示型号名（如 RGBLED-01），不会退回 Matter
+ * 设备类型名（ExtendedColorLight）。每次识别到型号都刷新一次，端点重建/重启后也不会丢。 */
+static void bridge_basic_set_node_label(cluster_t *cluster, uint16_t ep, const char *value)
+{
+    if (!value || value[0] == '\0') {
+        return;
+    }
+
+    if (!attribute::get(cluster, BridgedDeviceBasicInformation::Attributes::NodeLabel::Id)) {
+        /* 创建时就带初值，避免先空后写导致 HA 先按默认名建实体 */
+        if (!bridged_device_basic_information::attribute::create_node_label(cluster, (char *)value,
+                                                                            (uint16_t)strlen(value))) {
+            ESP_LOGW(TAG, "Create basic-info NodeLabel failed");
+        } else {
+            ESP_LOGI(TAG, "NodeLabel created on ep=%u: '%s'", ep, value);
+        }
+        return;
+    }
+
+    esp_matter_attr_val_t val = esp_matter_char_str((char *)value, (uint16_t)strlen(value));
+    esp_err_t err = attribute::update(ep, BridgedDeviceBasicInformation::Id,
+                                      BridgedDeviceBasicInformation::Attributes::NodeLabel::Id, &val);
+    /* 值未变化时 esp-matter 返回 ESP_ERR_NOT_FINISHED，属正常 */
+    if (err != ESP_OK && err != ESP_ERR_NOT_FINISHED) {
+        ESP_LOGW(TAG, "Update basic-info NodeLabel failed: %s", esp_err_to_name(err));
+    } else if (err == ESP_OK) {
+        ESP_LOGI(TAG, "NodeLabel updated on ep=%u: '%s'", ep, value);
+    }
+}
+
 /**
  * @brief 把 Zigbee 设备标识写入 Matter 桥接端点的 0x0039 集群
  */
@@ -748,6 +804,8 @@ static void bridge_apply_identity(uint16_t matter_ep, const device_identity_t *i
     bridge_basic_set_str(cluster, matter_ep, BridgedDeviceBasicInformation::Attributes::ProductName::Id,
                          &bridged_device_basic_information::attribute::create_product_name,
                          identity->model, "ProductName");
+    /* 设备名（HA 优先取 NodeLabel）：每次识别到型号都刷新，保证不会退回 ExtendedColorLight */
+    bridge_basic_set_node_label(cluster, matter_ep, identity->model);
     bridge_basic_set_str(cluster, matter_ep, BridgedDeviceBasicInformation::Attributes::SoftwareVersionString::Id,
                          &bridged_device_basic_information::attribute::create_software_version_string,
                          identity->sw_version, "SoftwareVersionString");
@@ -809,11 +867,13 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
             node_t *node = node::get();
             if (node) {
                 uint16_t use_uiid = (info->uiid != UIID_UNKNOWN) ? info->uiid : uiid;
+                bridge_set_pending_identity(identity);
                 app_bridged_device_t *recreated =
                     app_bridge_create_bridged_device(node, s_aggregator_ep_id,
                                                      uiid_to_matter_device_type_id(use_uiid),
                                                      ESP_MATTER_BRIDGED_DEVICE_TYPE_ZIGBEE,
                                                      app_bridge_zigbee_address(endpoint, short_addr), NULL);
+                bridge_set_pending_identity(NULL);
                 if (recreated) {
                     zboss_manager_register_bridged_device(short_addr, endpoint);
                     uint16_t matter_ep =
@@ -861,10 +921,12 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
             ESP_LOGE(TAG, "Could not find esp_matter node");
             return;
         }
+        bridge_set_pending_identity(identity);
         bridged = app_bridge_create_bridged_device(node, s_aggregator_ep_id,
                                                    uiid_to_matter_device_type_id(uiid),
                                                    ESP_MATTER_BRIDGED_DEVICE_TYPE_ZIGBEE,
                                                    app_bridge_zigbee_address(endpoint, short_addr), NULL);
+        bridge_set_pending_identity(NULL);
         if (!bridged) {
             ESP_LOGE(TAG, "Failed to create bridged device for 0x%04x (device_id=0x%08X, uiid=0x%04hx)",
                      short_addr, (unsigned int)device_id, uiid);
@@ -897,6 +959,32 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
 
     /* 入网后读一次子设备当前固件版本（OTA 集群 0x0019） */
     zdp_discovery_read_ota_version(short_addr, endpoint);
+}
+
+void bridge_manager_restore_identities(void)
+{
+    int count = device_info_get_count();
+    int applied = 0;
+
+    for (int i = 0; i < count; i++) {
+        device_info_t *info = device_info_get_by_index(i);
+        if (!info || info->matter_endpoint_id == 0 || info->model[0] == '\0') {
+            continue;
+        }
+
+        device_identity_t identity = {};
+        snprintf(identity.manufacturer, sizeof(identity.manufacturer), "%s", info->manufacturer);
+        snprintf(identity.model, sizeof(identity.model), "%s", info->model);
+        snprintf(identity.sw_version, sizeof(identity.sw_version), "%s", info->sw_version);
+        snprintf(identity.date_code, sizeof(identity.date_code), "%s", info->date_code);
+        identity.app_version = info->app_version;
+        identity.hw_version = info->hw_version;
+
+        bridge_apply_identity(info->matter_endpoint_id, &identity);
+        applied++;
+    }
+
+    ESP_LOGI(TAG, "Restored identity for %d bridged device(s)", applied);
 }
 
 void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,

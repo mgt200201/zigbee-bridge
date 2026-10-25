@@ -508,6 +508,16 @@ static esp_err_t zb_read_attr_resp_handler(
         ESP_LOGI(TAG, "  deviceId (derived from IEEE): 0x%08lX", (unsigned long)device_id);
     }
 
+    /* Basic 读失败/只回部分属性时 model 为空，不能让已确认设备的 uiid 回落成 UNKNOWN，
+     * 否则会被按温湿度传感器重建端点。优先沿用 device_info 中已记录的 uiid。 */
+    if (got_device_id && uiid == UIID_UNKNOWN) {
+        device_info_t *cached = device_info_find_by_device_id(device_id);
+        if (cached && cached->uiid != UIID_UNKNOWN) {
+            uiid = cached->uiid;
+            ESP_LOGI(TAG, "  uiid (from cached device_info): 0x%04X", uiid);
+        }
+    }
+
     if (got_device_id && device_id != DEVICE_ID_UNKNOWN && device_id != 0) {
         bridge_manager_on_device_identified(device_id, uiid, short_addr, src_endpoint,
                                             known ? known->ieee_addr : NULL, &identity);

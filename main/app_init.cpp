@@ -137,6 +137,10 @@ extern "C" uint16_t app_init_matter_stack(void)
     err = app_bridge_initialize(node, bridge_manager_create_devices_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume bridged endpoints: %d", err));
 
+    /* 桥接端点恢复后，用 NVS 缓存的标识回填 ProductName/NodeLabel 等属性。
+     * 这些属性不会随端点自动恢复，否则 HA 里设备名会退回默认值。 */
+    bridge_manager_restore_identities();
+
     /* 重启后若已配网过，标记 Matter 已配网（fabric）。常亮还需检测到 HA 活跃会话。 */
     if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
         app_status_notify_ready();

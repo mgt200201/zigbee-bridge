@@ -51,6 +51,13 @@ public:
 #define NVS_KEY_MEN_PREFIX   "men_"
 #define NVS_KEY_MEN_FMT      NVS_KEY_MEN_PREFIX "%08X"
 
+/* 设备标识信息持久化（NVS key 最长 15 字符，前缀保持 4 字符） */
+#define NVS_KEY_MFR_PREFIX   "mfr_"
+#define NVS_KEY_MDL_PREFIX   "mdl_"
+#define NVS_KEY_SWV_PREFIX   "swv_"
+#define NVS_KEY_DAT_PREFIX   "dat_"
+#define NVS_KEY_VER_PREFIX   "ver_"
+
 /** 设备信息内存表 */
 static device_info_t s_device_infos[MAX_DEVICE_INFO] = {0};
 
@@ -69,6 +76,14 @@ static void make_nvs_key(uint32_t device_id, char *key)
 static void make_men_nvs_key(uint32_t device_id, char *key)
 {
     sprintf(key, NVS_KEY_MEN_FMT, (unsigned int)device_id);
+}
+
+/**
+ * @brief 生成带前缀的标识信息 NVS key（前缀 4 字符 + 8 hex + '\0'）
+ */
+static void make_tagged_nvs_key(const char *prefix, uint32_t device_id, char *key)
+{
+    sprintf(key, "%s%08X", prefix, (unsigned int)device_id);
 }
 
 /**
@@ -137,12 +152,39 @@ void device_info_init(void)
                             }
                         }
                         memset(dev->ieee_addr, 0, sizeof(esp_zb_ieee_addr_t));
-                        dev->manufacturer[0] = '\0';
-                        dev->model[0] = '\0';
-                        dev->sw_version[0] = '\0';
-                        dev->date_code[0] = '\0';
-                        dev->app_version = 0;
-                        dev->hw_version = 0;
+
+                        /* 恢复持久化的设备标识（制造商/型号/版本），
+                         * 网关启动后用它回填 Matter 端点属性，避免设备名丢失 */
+                        char id_key[16];
+                        size_t str_len = sizeof(dev->manufacturer);
+                        make_tagged_nvs_key(NVS_KEY_MFR_PREFIX, device_id, id_key);
+                        if (nvs_get_str(handle, id_key, dev->manufacturer, &str_len) != ESP_OK) {
+                            dev->manufacturer[0] = '\0';
+                        }
+                        str_len = sizeof(dev->model);
+                        make_tagged_nvs_key(NVS_KEY_MDL_PREFIX, device_id, id_key);
+                        if (nvs_get_str(handle, id_key, dev->model, &str_len) != ESP_OK) {
+                            dev->model[0] = '\0';
+                        }
+                        str_len = sizeof(dev->sw_version);
+                        make_tagged_nvs_key(NVS_KEY_SWV_PREFIX, device_id, id_key);
+                        if (nvs_get_str(handle, id_key, dev->sw_version, &str_len) != ESP_OK) {
+                            dev->sw_version[0] = '\0';
+                        }
+                        str_len = sizeof(dev->date_code);
+                        make_tagged_nvs_key(NVS_KEY_DAT_PREFIX, device_id, id_key);
+                        if (nvs_get_str(handle, id_key, dev->date_code, &str_len) != ESP_OK) {
+                            dev->date_code[0] = '\0';
+                        }
+                        uint16_t ver = 0;
+                        make_tagged_nvs_key(NVS_KEY_VER_PREFIX, device_id, id_key);
+                        if (nvs_get_u16(handle, id_key, &ver) == ESP_OK) {
+                            dev->app_version = (uint8_t)(ver >> 8);
+                            dev->hw_version = (uint8_t)(ver & 0xFF);
+                        } else {
+                            dev->app_version = 0;
+                            dev->hw_version = 0;
+                        }
                         restored_count++;
                         ESP_LOGI(TAG, "Restored device: device_id=0x%08X, uiid=0x%04X", (unsigned int)device_id, uiid);
                     } else {
@@ -303,12 +345,44 @@ void device_info_set_identity(uint32_t device_id, const device_identity_t *ident
         ESP_LOGW(TAG, "Cannot set identity: device_id=0x%08X not found", (unsigned int)device_id);
         return;
     }
-    snprintf(dev->manufacturer, sizeof(dev->manufacturer), "%s", identity->manufacturer);
-    snprintf(dev->model, sizeof(dev->model), "%s", identity->model);
-    snprintf(dev->sw_version, sizeof(dev->sw_version), "%s", identity->sw_version);
-    snprintf(dev->date_code, sizeof(dev->date_code), "%s", identity->date_code);
-    dev->app_version = identity->app_version;
-    dev->hw_version = identity->hw_version;
+    /* 只覆盖本次读到非空字段：Basic 读超时/部分返回时不要把已知型号清空 */
+    if (identity->manufacturer[0] != '\0') {
+        snprintf(dev->manufacturer, sizeof(dev->manufacturer), "%s", identity->manufacturer);
+    }
+    if (identity->model[0] != '\0') {
+        snprintf(dev->model, sizeof(dev->model), "%s", identity->model);
+    }
+    if (identity->sw_version[0] != '\0') {
+        snprintf(dev->sw_version, sizeof(dev->sw_version), "%s", identity->sw_version);
+    }
+    if (identity->date_code[0] != '\0') {
+        snprintf(dev->date_code, sizeof(dev->date_code), "%s", identity->date_code);
+    }
+    if (identity->app_version > 0) {
+        dev->app_version = identity->app_version;
+    }
+    if (identity->hw_version > 0) {
+        dev->hw_version = identity->hw_version;
+    }
+
+    /* 持久化到 NVS：网关重启后在桥接端点恢复时回填，保证设备名稳定 */
+    nvs_handle_t handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+        char key[16];
+        make_tagged_nvs_key(NVS_KEY_MFR_PREFIX, device_id, key);
+        nvs_set_str(handle, key, dev->manufacturer);
+        make_tagged_nvs_key(NVS_KEY_MDL_PREFIX, device_id, key);
+        nvs_set_str(handle, key, dev->model);
+        make_tagged_nvs_key(NVS_KEY_SWV_PREFIX, device_id, key);
+        nvs_set_str(handle, key, dev->sw_version);
+        make_tagged_nvs_key(NVS_KEY_DAT_PREFIX, device_id, key);
+        nvs_set_str(handle, key, dev->date_code);
+        make_tagged_nvs_key(NVS_KEY_VER_PREFIX, device_id, key);
+        nvs_set_u16(handle, key, (uint16_t)(((uint16_t)dev->app_version << 8) | dev->hw_version));
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+
     ESP_LOGI(TAG, "Device 0x%08X identity: mfr=%s model=%s sw=%s app=%u hw=%u",
              (unsigned int)device_id, dev->manufacturer, dev->model, dev->sw_version,
              dev->app_version, dev->hw_version);
@@ -345,6 +419,17 @@ void device_info_remove_by_device_id(uint32_t device_id)
         make_nvs_key(device_id, key);
         err = nvs_erase_key(handle, key);
         make_men_nvs_key(device_id, key);
+        nvs_erase_key(handle, key);
+        /* 一并擦除持久化的标识信息，避免设备重配后沿用旧名字 */
+        make_tagged_nvs_key(NVS_KEY_MFR_PREFIX, device_id, key);
+        nvs_erase_key(handle, key);
+        make_tagged_nvs_key(NVS_KEY_MDL_PREFIX, device_id, key);
+        nvs_erase_key(handle, key);
+        make_tagged_nvs_key(NVS_KEY_SWV_PREFIX, device_id, key);
+        nvs_erase_key(handle, key);
+        make_tagged_nvs_key(NVS_KEY_DAT_PREFIX, device_id, key);
+        nvs_erase_key(handle, key);
+        make_tagged_nvs_key(NVS_KEY_VER_PREFIX, device_id, key);
         nvs_erase_key(handle, key);
         if (err == ESP_OK || err == ESP_ERR_NVS_NOT_FOUND) {
             nvs_commit(handle);
