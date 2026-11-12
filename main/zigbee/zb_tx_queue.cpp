@@ -157,63 +157,115 @@ static void dispatch_tx(const zb_tx_item_t *item)
 
     switch (item->kind) {
     case ZB_TX_ON_OFF: {
-        esp_zb_zcl_on_off_cmd_t cmd = {
+        /* 用 custom 命令发送，才能置 dis_default_resp，让灯不再回 default response */
+        esp_zb_zcl_custom_cluster_cmd_t cmd = {
             .zcl_basic_cmd = basic,
             .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-            .on_off_cmd_id = item->u8_a,
+            .profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+            .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+            .custom_cmd_id = item->u8_a,
+            .data = {
+                .type = ESP_ZB_ZCL_ATTR_TYPE_SET,
+                .size = 0,
+                .value = NULL,
+            },
         };
-        uint8_t seq = esp_zb_zcl_on_off_cmd_req(&cmd);
+        cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+        cmd.dis_default_resp = 1;
+        uint8_t seq = esp_zb_zcl_custom_cluster_cmd_req(&cmd);
         ESP_LOGI(TAG, "On/Off=%s -> 0x%04x ep=%d seq=%u",
                  item->u8_a == ESP_ZB_ZCL_CMD_ON_OFF_ON_ID ? "ON" : "OFF",
                  item->short_addr, item->endpoint, seq);
         break;
     }
     case ZB_TX_MOVE_TO_LEVEL: {
-        esp_zb_zcl_move_to_level_cmd_t cmd = {
+        uint8_t payload[3] = { item->u8_a, 0, 0 };   /* level, transition_time(lo,hi)=0 */
+        esp_zb_zcl_custom_cluster_cmd_t cmd = {
             .zcl_basic_cmd = basic,
             .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-            .level = item->u8_a,
-            .transition_time = 0,
+            .profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+            .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+            .custom_cmd_id = ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_TO_LEVEL,
+            .data = {
+                .type = ESP_ZB_ZCL_ATTR_TYPE_SET,
+                .size = sizeof(payload),
+                .value = payload,
+            },
         };
-        uint8_t seq = esp_zb_zcl_level_move_to_level_cmd_req(&cmd);
+        cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+        cmd.dis_default_resp = 1;
+        uint8_t seq = esp_zb_zcl_custom_cluster_cmd_req(&cmd);
         ESP_LOGI(TAG, "MoveToLevel=%u -> 0x%04x ep=%d seq=%u",
                  item->u8_a, item->short_addr, item->endpoint, seq);
         break;
     }
     case ZB_TX_MOVE_TO_COLOR: {
-        esp_zb_zcl_color_move_to_color_cmd_t cmd = {
+        uint8_t payload[6] = {   /* colorX(lo,hi), colorY(lo,hi), transition_time(lo,hi)=0 */
+            (uint8_t)(item->u16_a & 0xff), (uint8_t)(item->u16_a >> 8),
+            (uint8_t)(item->u16_b & 0xff), (uint8_t)(item->u16_b >> 8),
+            0, 0,
+        };
+        esp_zb_zcl_custom_cluster_cmd_t cmd = {
             .zcl_basic_cmd = basic,
             .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-            .color_x = item->u16_a,
-            .color_y = item->u16_b,
-            .transition_time = 0,
+            .profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+            .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            .custom_cmd_id = ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR,
+            .data = {
+                .type = ESP_ZB_ZCL_ATTR_TYPE_SET,
+                .size = sizeof(payload),
+                .value = payload,
+            },
         };
-        uint8_t seq = esp_zb_zcl_color_move_to_color_cmd_req(&cmd);
+        cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+        cmd.dis_default_resp = 1;
+        uint8_t seq = esp_zb_zcl_custom_cluster_cmd_req(&cmd);
         ESP_LOGI(TAG, "MoveToColor(x=%u,y=%u) -> 0x%04x ep=%d seq=%u",
                  item->u16_a, item->u16_b, item->short_addr, item->endpoint, seq);
         break;
     }
     case ZB_TX_MOVE_TO_HUE_SAT: {
-        esp_zb_color_move_to_hue_saturation_cmd_t cmd = {
+        uint8_t payload[4] = {   /* hue, saturation, transition_time(lo,hi)=0 */
+            item->u8_a, item->u8_b, 0, 0,
+        };
+        esp_zb_zcl_custom_cluster_cmd_t cmd = {
             .zcl_basic_cmd = basic,
             .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-            .hue = item->u8_a,
-            .saturation = item->u8_b,
-            .transition_time = 0,
+            .profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+            .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            .custom_cmd_id = ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_HUE_SATURATION,
+            .data = {
+                .type = ESP_ZB_ZCL_ATTR_TYPE_SET,
+                .size = sizeof(payload),
+                .value = payload,
+            },
         };
-        uint8_t seq = esp_zb_zcl_color_move_to_hue_and_saturation_cmd_req(&cmd);
+        cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+        cmd.dis_default_resp = 1;
+        uint8_t seq = esp_zb_zcl_custom_cluster_cmd_req(&cmd);
         ESP_LOGI(TAG, "MoveToHueSat(h=%u,s=%u) -> 0x%04x ep=%d seq=%u",
                  item->u8_a, item->u8_b, item->short_addr, item->endpoint, seq);
         break;
     }
     case ZB_TX_MOVE_TO_COLOR_TEMP: {
-        esp_zb_zcl_color_move_to_color_temperature_cmd_t cmd = {
+        uint8_t payload[4] = {   /* color_temperature(lo,hi), transition_time(lo,hi)=0 */
+            (uint8_t)(item->u16_a & 0xff), (uint8_t)(item->u16_a >> 8), 0, 0,
+        };
+        esp_zb_zcl_custom_cluster_cmd_t cmd = {
             .zcl_basic_cmd = basic,
             .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-            .color_temperature = item->u16_a,
-            .transition_time = 0,
+            .profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+            .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            .custom_cmd_id = ESP_ZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR_TEMPERATURE,
+            .data = {
+                .type = ESP_ZB_ZCL_ATTR_TYPE_SET,
+                .size = sizeof(payload),
+                .value = payload,
+            },
         };
-        uint8_t seq = esp_zb_zcl_color_move_to_color_temperature_cmd_req(&cmd);
+        cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+        cmd.dis_default_resp = 1;
+        uint8_t seq = esp_zb_zcl_custom_cluster_cmd_req(&cmd);
         ESP_LOGI(TAG, "MoveToColorTemp=%u -> 0x%04x ep=%d seq=%u",
                  item->u16_a, item->short_addr, item->endpoint, seq);
         break;

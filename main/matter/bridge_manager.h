@@ -102,6 +102,25 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
 void bridge_manager_restore_identities(void);
 
 /**
+ * @brief 清理没有对应 Zigbee 设备的残留桥接端点
+ *
+ * 子设备离网时若端点销毁失败（或历史版本遗留），Matter 数据模型里会留下孤儿端点，
+ * HA 会一直显示该设备。启动时在 bridge_manager_restore_identities() 之后调用一次，
+ * 把没有 device_info 记录的桥接端点全部销毁。
+ */
+void bridge_manager_reconcile_bridged_devices(void);
+
+/**
+ * @brief 延迟触发一次根端点 Descriptor.PartsList 变化报告
+ *
+ * 桥接端点销毁后，esp_matter 在 disable() 里标记的 PartsList 脏标记经常与
+ * 正在生成的订阅报告重叠而被丢弃，HA 只收到删除前的列表，实体长期残留。
+ * 销毁完成后调用本函数，延迟一小段时间再显式上报一次，此时端点已从数据模型
+ * 中移除，HA 收到的 PartsList 一定不含它。
+ */
+void bridge_manager_notify_parts_list_changed(void);
+
+/**
  * @brief 上报传感器数据到 Matter
  */
 void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,

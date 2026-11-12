@@ -38,9 +38,38 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <soc/gpio_num.h>
+#include <string.h>
 
 static const char *TAG = "zboss_mgr";
 static TaskHandle_t s_zboss_task = NULL;
+
+/* ==================== 离网（rejoin=1）延迟确认 ==================== */
+
+/* Leave 命令带 rejoin=1 时，设备声明"我会重新入网"。
+ * 若它真的回来会发 Device_annce，这里把待确认记录取消；
+ * 若 60s 内没有回来（例如长按复位后不再入网），则按离网清理，
+ * 避免 Matter 端点/device_info 永久残留。 */
+#define LEAVE_REJOIN_GRACE_MS   60000
+
+typedef struct {
+    bool valid;
+    esp_zb_ieee_addr_t ieee;
+    uint16_t short_addr;
+} zb_pending_leave_t;
+
+static zb_pending_leave_t s_pending_leave;
+
+static void pending_leave_expire_cb(uint8_t param)
+{
+    (void)param;
+    if (!s_pending_leave.valid) {
+        return;
+    }
+    ESP_LOGW(TAG, "Device 0x%04hx did not rejoin after leave, removing",
+             s_pending_leave.short_addr);
+    s_pending_leave.valid = false;
+    zdp_discovery_handle_device_leave(s_pending_leave.short_addr, s_pending_leave.ieee);
+}
 
 /* ==================== ZBOSS 信号处理 ==================== */
 
@@ -104,6 +133,11 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         esp_zb_zdo_signal_device_annce_params_t *params =
             (esp_zb_zdo_signal_device_annce_params_t *)esp_zb_app_signal_get_params(p_sg_p);
         ESP_LOGI(TAG, "New device commissioned or rejoined (short: 0x%04hx)", params->device_short_addr);
+        /* 设备回来了：取消 rejoin=1 的离网待确认 */
+        if (s_pending_leave.valid &&
+            memcmp(s_pending_leave.ieee, params->ieee_addr, sizeof(esp_zb_ieee_addr_t)) == 0) {
+            s_pending_leave.valid = false;
+        }
         zigbee_db_add_or_update(params->ieee_addr, params->device_short_addr);
         zdp_discovery_handle_device_annce(params->device_short_addr, params->ieee_addr,
                                           zigbee_net_is_steering());
@@ -116,6 +150,12 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         ESP_LOGI(TAG, "Device leaving (short: 0x%04hx, rejoin: %d)", leave->short_addr, leave->rejoin);
         if (!leave->rejoin) {
             zdp_discovery_handle_device_leave(leave->short_addr, leave->device_addr);
+        } else {
+            /* rejoin=1：先等它回来，60s 内没有 Device_annce 才真正清理 */
+            memcpy(s_pending_leave.ieee, leave->device_addr, sizeof(esp_zb_ieee_addr_t));
+            s_pending_leave.short_addr = leave->short_addr;
+            s_pending_leave.valid = true;
+            esp_zb_scheduler_alarm((esp_zb_callback_t)pending_leave_expire_cb, 0, LEAVE_REJOIN_GRACE_MS);
         }
         break;
     }

@@ -58,6 +58,27 @@ static const char *TAG = "zb_dev_ota";
  * 开启的 DEVICE_SPECIFIC 目标 IEEE 8B = 64B。仅用于日志说明；切勿据此去改 image_size
  * (那会直接少下发 64B 数据，导致设备收不满整包而 incomplete 中止)。 */
 #define ZB_OTA_SRV_HDR_BYTES        (56 + 8)
+/* esp-zigbee-lib v1.6.8（ZBOSS）OTA Server 的缺陷规避：
+ *
+ * Query Next Image 到达时，库先调用本文件的查询回调，再自己去文件表里按
+ * manufacturer_code / image_type / file_version 查镜像。查不到时它仍然调用
+ *     zb_zcl_ota_upgrade_send_query_next_image_response(param, NULL)
+ * 并在内部无条件下解引用 file->field_control（结构体偏移 0xc），直接
+ *     Guru Meditation LoadProhibited / EXCVADDR 0x0000000c
+ * 应用回调返回 ESP_ERR_NOT_FOUND 拦不住：库不看返回值语义，只做一次 "== -2" 的比较。
+ *
+ * 路径是：回调返回值 → esp_zigbee_zcl_ota_upgrade 里经 esp_err_to_zb_ret() 映射
+ * → ZBOSS query_next_image_handler 判断 (ret == -2)。反汇编 esp_err_to_zb_ret()
+ * 得到映射表：0→0, 0x101→-22, 0x103→-35, 0x104→-6, 0x105→-28, 0x107→-30,
+ * 0x10C→-2, 其它非零→-1。因此只有返回 ESP_ERR_NOT_FINISHED(0x10C) 才会变成 -2，
+ * 让库跳过响应构造、只打一条 trace 后释放 buffer。
+ *
+ * 所以：
+ *   - 有匹配镜像          → 返回 ESP_OK，库正常回 Query Next Image Response（OTA 保留）
+ *   - 无匹配/非目标/版本已够 → 返回本值，库静默丢弃，不崩溃也不回响应
+ * 客户端收不到响应按 ZCL 超时处理，等价于“没有可用镜像”，不影响后续真实升级。
+ * 切勿改成 ESP_ERR_NOT_FOUND 或 ESP_FAIL，那会重新走到 NULL 解引用分支。 */
+#define ZB_OTA_SRV_NO_RESPONSE      ESP_ERR_NOT_FINISHED
 
 #pragma pack(push, 1)
 typedef struct {
@@ -402,6 +423,11 @@ static esp_err_t notify_image_locked(bool notify_on)
     req.ota_file_header.image_type = s_ctx.image_type;
     req.ota_file_header.file_version = s_ctx.file_version;
     req.ota_file_header.field_control = s_ctx.field_control;
+    /* 库在匹配查询时会（只要请求带了 hardware_version）用这两个值做范围判断。
+     * 默认 0/0 会把绝大多数设备判为不匹配，从而再次走到 NULL 分支。
+     * 这里放宽到全范围，保证 stage 过镜像后查询一定能命中。 */
+    req.ota_file_header.optional.minimum_hardware_version = 0x0000;
+    req.ota_file_header.optional.maximum_hardware_version = 0xFFFF;
 
     if (s_ctx.has_target) {
         req.ota_file_header.field_control |= ESP_ZB_ZCL_OTA_UPGRADE_FILE_HEADER_FC_DEVICE_SPECIFIC;
@@ -515,7 +541,8 @@ esp_err_t zb_device_ota_handle_action(esp_zb_core_action_callback_id_t callback_
         const auto *msg =
             static_cast<const esp_zb_zcl_ota_upgrade_server_query_image_message_t *>(message);
         if (msg->info.status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-            return ESP_FAIL;
+            /* 同样不能让库继续走响应构造（否则 file 为 NULL 崩溃） */
+            return ZB_OTA_SRV_NO_RESPONSE;
         }
 
         ESP_LOGI(TAG, "OTA query from 0x%04x: manuf=0x%04x type=0x%04x ver=0x%08lx",
@@ -536,18 +563,20 @@ esp_err_t zb_device_ota_handle_action(esp_zb_core_action_callback_id_t callback_
         unlock_ctx();
 
         if (!match) {
-            ESP_LOGW(TAG, "OTA query rejected: no matching staged image");
-            return ESP_ERR_NOT_FOUND;
+            ESP_LOGW(TAG, "OTA query rejected: no matching staged image (no response sent)");
+            return ZB_OTA_SRV_NO_RESPONSE;
         }
         if (!addr_ok) {
-            ESP_LOGW(TAG, "OTA query rejected: not target device");
-            return ESP_ERR_NOT_FOUND;
+            ESP_LOGW(TAG, "OTA query rejected: not target device (no response sent)");
+            return ZB_OTA_SRV_NO_RESPONSE;
         }
-        /* 客户端版本已 >= 镜像则拒绝；0xFFFFFFFF 表示未知，放行 */
+        /* 客户端版本已 >= 镜像则拒绝；0xFFFFFFFF 表示未知，放行。
+         * 注意 ZBOSS 自身只跳过 file_version == 请求版本的情况，这里判断更严格，
+         * 凡是本函数返回非 0 的查询都不会进入库的查表/响应流程，因此不会崩溃。 */
         if (msg->version != 0xFFFFFFFFu && msg->version >= file_ver) {
-            ESP_LOGI(TAG, "OTA query rejected: client already has ver>=0x%08lx",
+            ESP_LOGI(TAG, "OTA query rejected: client already has ver>=0x%08lx (no response sent)",
                      (unsigned long)file_ver);
-            return ESP_ERR_NOT_FOUND;
+            return ZB_OTA_SRV_NO_RESPONSE;
         }
         return ESP_OK;
     }

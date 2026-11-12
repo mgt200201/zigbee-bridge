@@ -87,8 +87,9 @@ void zdp_discovery_read_ota_version(uint16_t short_addr, uint8_t endpoint);
  *
  * 当设备 uiid 识别为 UIID_TEMP_HUMIDITY_SENSOR (0x0001) 时调用，
  * 按主流温湿度计参数向子设备下发 Configure Reporting：
- *   - 温度 MeasuredValue (0x0402/0x0000)
- *   - 湿度 MeasuredValue (0x0405/0x0000)
+ *   - 温度 MeasuredValue (0x0402/0x0000)：min=5s、max=29min、变化 0.5°C
+ *   - 湿度 MeasuredValue (0x0405/0x0000)：min=5s、max=29min、变化 6%
+ *   - 电池电量 BatteryPercentageRemaining (0x0001/0x0021)：min=16min、max=27min、变化 1%
  *
  * @param short_addr 目标设备短地址
  * @param endpoint   目标设备端点号

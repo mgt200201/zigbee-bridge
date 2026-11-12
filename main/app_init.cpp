@@ -141,6 +141,9 @@ extern "C" uint16_t app_init_matter_stack(void)
      * 这些属性不会随端点自动恢复，否则 HA 里设备名会退回默认值。 */
     bridge_manager_restore_identities();
 
+    /* 清理历史版本/删除失败遗留的孤儿桥接端点，避免 HA 里残留已离网设备。 */
+    bridge_manager_reconcile_bridged_devices();
+
     /* 重启后若已配网过，标记 Matter 已配网（fabric）。常亮还需检测到 HA 活跃会话。 */
     if (chip::Server::GetInstance().GetFabricTable().FabricCount() > 0) {
         app_status_notify_ready();

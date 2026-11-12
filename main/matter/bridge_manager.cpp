@@ -36,6 +36,9 @@
 #include <esp_matter.h>
 #include <esp_matter_bridge.h>
 #include <esp_matter_console.h>
+#include <app-common/zap-generated/ids/Attributes.h>
+#include <app-common/zap-generated/ids/Clusters.h>
+#include <app/reporting/reporting.h>
 #include <nvs_flash.h>
 
 #include <setup_payload/SetupPayload.h>
@@ -294,6 +297,37 @@ static void bridge_api_report_sensor(uint16_t short_addr, uint8_t endpoint,
     bridge_manager_report_sensor_data(short_addr, endpoint, cluster_id, raw_value);
 }
 
+static void bridge_api_report_battery(uint16_t short_addr, uint8_t endpoint,
+                                     uint8_t percent_half, uint8_t voltage_100mv)
+{
+    app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+    if (!dev || !dev->dev || !dev->dev->endpoint) {
+        ESP_LOGW(TAG, "Cannot report battery: no bridge for 0x%04x", short_addr);
+        return;
+    }
+    uint16_t matter_ep = esp_matter::endpoint::get_id(dev->dev->endpoint);
+
+    /* ZCL BatteryPercentageRemaining 与 Matter BatPercentRemaining 同为 0.5% 单位，可直接透传 */
+    if (percent_half != 0xFF) {
+        esp_matter_attr_val_t val = esp_matter_nullable_uint8(percent_half > 200 ? 200 : percent_half);
+        esp_err_t err = bridge_set_attr_no_echo(matter_ep, PowerSource::Id,
+                                                PowerSource::Attributes::BatPercentRemaining::Id, &val);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "BatPercentRemaining update failed on ep %d: %s", matter_ep, esp_err_to_name(err));
+        }
+    }
+
+    /* ZCL 电压单位 100mV，Matter BatVoltage 单位 mV */
+    if (voltage_100mv != 0xFF) {
+        esp_matter_attr_val_t val = esp_matter_nullable_uint32((uint32_t)voltage_100mv * 100);
+        esp_err_t err = bridge_set_attr_no_echo(matter_ep, PowerSource::Id,
+                                                PowerSource::Attributes::BatVoltage::Id, &val);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "BatVoltage update failed on ep %d: %s", matter_ep, esp_err_to_name(err));
+        }
+    }
+}
+
 static void bridge_api_report_on_off(uint16_t short_addr, uint8_t endpoint, bool on)
 {
     app_bridged_device_t *dev = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
@@ -439,6 +473,7 @@ static void bridge_api_report_color_mode(uint16_t short_addr, uint8_t endpoint, 
 static const zcl_bridge_api_t s_bridge_api_impl = {
     .report_sensor = bridge_api_report_sensor,
     .report_on_off = bridge_api_report_on_off,
+    .report_battery = bridge_api_report_battery,
     .report_level = bridge_api_report_level,
     .report_color_xy = bridge_api_report_color_xy,
     .report_color_hsv = bridge_api_report_color_hsv,
@@ -511,6 +546,44 @@ void bridge_manager_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     }
 }
 
+/* ==================== 电池供电设备的 PowerSource 集群 ==================== */
+
+/**
+ * 在桥接端点上挂 PowerSource(0x002F) 集群，让 HA 能为设备创建电量实体。
+ * Battery/Wired 两个 feature 必须且只能开一个，这里按电池供电设备声明 Battery。
+ * 电量/电压属性初始为 null（未知），等子设备上报后再更新。
+ */
+static void bridge_add_power_source(uint16_t matter_ep)
+{
+    endpoint_t *ep = endpoint::get(matter_ep);
+    if (!ep) {
+        ESP_LOGW(TAG, "Cannot add PowerSource: matter ep %u not found", matter_ep);
+        return;
+    }
+    if (cluster::get(ep, PowerSource::Id)) {
+        return;
+    }
+
+    power_source::config_t ps_conf;
+    ps_conf.status = 1;                  /* Active */
+    ps_conf.order = 1;
+    snprintf(ps_conf.description, sizeof(ps_conf.description), "Battery");
+    ps_conf.feature_flags = power_source::feature::battery::get_id();
+    ps_conf.features.battery.bat_charge_level = 0;       /* OK */
+    ps_conf.features.battery.bat_replacement_needed = false;
+    ps_conf.features.battery.bat_replaceability = 0;     /* Unspecified */
+
+    cluster_t *ps = power_source::create(ep, &ps_conf, CLUSTER_FLAG_SERVER);
+    if (!ps) {
+        ESP_LOGE(TAG, "Failed to create PowerSource cluster on ep %u", matter_ep);
+        return;
+    }
+
+    power_source::attribute::create_bat_percent_remaining(ps, nullable<uint8_t>(), 0, 200);
+    power_source::attribute::create_bat_voltage(ps, nullable<uint32_t>(), 0, 0xFFFF);
+    ESP_LOGI(TAG, "PowerSource (battery) added on ep %u", matter_ep);
+}
+
 /* ==================== 桥接端点创建回调 ==================== */
 
 esp_err_t bridge_manager_create_devices_cb(esp_matter::endpoint_t *ep, uint32_t device_type_id, void *priv_data)
@@ -528,6 +601,8 @@ esp_err_t bridge_manager_create_devices_cb(esp_matter::endpoint_t *ep, uint32_t 
         humidity_conf.min_measured_value = { static_cast<uint16_t>(0) };
         humidity_conf.max_measured_value = { static_cast<uint16_t>(10000) };
         relative_humidity_measurement::create(ep, &humidity_conf, CLUSTER_FLAG_SERVER);
+        /* TH-01 等温湿度计多为电池供电，加 PowerSource 让 HA 显示电量 */
+        bridge_add_power_source(endpoint::get_id(ep));
         break;
     }
     case ESP_MATTER_EXTENDED_COLOR_LIGHT_DEVICE_TYPE_ID: {
@@ -840,18 +915,25 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
     if (info) {
         /* ===== CASE 1: 设备重连 ===== */
         uint16_t old_short_addr = info->short_addr;
+        uint16_t old_matter_ep = info->matter_endpoint_id;
         device_info_update_online(device_id, short_addr, endpoint, ieee_addr);
 
-        if (old_short_addr != short_addr) {
-            /* 短地址变化时始终刷新 Matter bridge 的下行地址。
-             * 注意：不能依赖 info->matter_endpoint_id（网关重启后从 NVS 恢复为 0），
-             * 否则子设备断电换短地址重连时，下行仍发往旧的失效地址，导致 HA 无法控制。 */
-            app_bridged_device_t *bridged = app_bridge_get_device_by_zigbee_shortaddr(old_short_addr);
-            if (bridged) {
-                bridged->dev_addr.zigbee_shortaddr = short_addr;
-                ESP_LOGI(TAG, "Updated Matter bridge addr: 0x%04hx -> 0x%04hx (device_id=0x%08X)",
-                         old_short_addr, short_addr, (unsigned int)device_id);
-            }
+        /* 定位已有桥接端点：新短地址 → 旧短地址 → NVS 里记录的 Matter 端点。
+         * 短地址会随重入网变化，只用短地址查会漏掉已有端点，
+         * 结果就是重复创建端点、旧端点残留（HA 里出现同名旧设备）。 */
+        app_bridged_device_t *existing = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+        if (!existing && old_short_addr != short_addr) {
+            existing = app_bridge_get_device_by_zigbee_shortaddr(old_short_addr);
+        }
+        if (!existing && old_matter_ep != 0) {
+            existing = app_bridge_get_device_by_matter_endpointid(old_matter_ep);
+        }
+        if (existing && existing->dev_addr.zigbee_shortaddr != short_addr) {
+            /* 短地址变化时始终刷新 Matter bridge 的下行地址，
+             * 否则下行仍发往旧的失效地址，导致 HA 无法控制。 */
+            ESP_LOGI(TAG, "Updated Matter bridge addr: 0x%04hx -> 0x%04hx (device_id=0x%08X)",
+                     existing->dev_addr.zigbee_shortaddr, short_addr, (unsigned int)device_id);
+            existing->dev_addr.zigbee_shortaddr = short_addr;
             zboss_manager_register_bridged_device(short_addr, endpoint);
         }
 
@@ -859,10 +941,6 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
          * （例如曾离网导致端点被销毁，而 device_info 因短地址过期未被清理），
          * 直接走重连会导致永远没有 Matter 节点、HA 看不到。
          * 这里检测到无端点就按新设备逻辑重建一个。 */
-        app_bridged_device_t *existing = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
-        if (!existing) {
-            existing = app_bridge_get_device_by_zigbee_shortaddr(old_short_addr);
-        }
         if (!existing) {
             node_t *node = node::get();
             if (node) {
@@ -887,6 +965,14 @@ void bridge_manager_on_device_identified(uint32_t device_id, uint16_t uiid,
 
         if (info->uiid == UIID_UNKNOWN && uiid != UIID_UNKNOWN) {
             info->uiid = uiid;
+        }
+
+        /* 老数据的 matter_endpoint_id 可能是 0，补写一次，供离网清理按端点定位。 */
+        if (info->matter_endpoint_id == 0) {
+            uint16_t matter_ep = app_bridge_get_matter_endpointid_by_zigbee_shortaddr(short_addr);
+            if (matter_ep != chip::kInvalidEndpointId) {
+                device_info_set_matter_endpoint(device_id, matter_ep);
+            }
         }
 
         /* 重连/重启 resume 后端点上的标识属性不会自动重写，这里回填一次 */
@@ -981,10 +1067,134 @@ void bridge_manager_restore_identities(void)
         identity.hw_version = info->hw_version;
 
         bridge_apply_identity(info->matter_endpoint_id, &identity);
+
+        /* 升级前配网的温湿度计端点里没有 PowerSource 集群（重启时端点从 NVS 恢复，
+         * 不会再走 create_devices_cb），这里补建一次，避免电量实体缺失。 */
+        if (info->uiid == UIID_TEMP_HUMIDITY_SENSOR) {
+            bridge_add_power_source(info->matter_endpoint_id);
+        }
         applied++;
     }
 
     ESP_LOGI(TAG, "Restored identity for %d bridged device(s)", applied);
+}
+
+/* ==================== 残留桥接端点清理 ==================== */
+
+/**
+ * @brief 判断某个 Matter 端点是否仍对应一台已注册的 Zigbee 设备
+ *
+ * 老版本写入的 device_info.matter_endpoint_id 可能为 0，
+ * 此时用短地址映射兜底，命中后顺手回填，后续离网清理就能按端点精确定位。
+ */
+static bool bridge_endpoint_is_known(uint16_t matter_ep)
+{
+    int count = device_info_get_count();
+    for (int i = 0; i < count; i++) {
+        device_info_t *info = device_info_get_by_index(i);
+        if (!info) {
+            continue;
+        }
+        if (info->matter_endpoint_id == matter_ep) {
+            return true;
+        }
+        if (info->matter_endpoint_id == 0 &&
+            app_bridge_get_matter_endpointid_by_zigbee_shortaddr(info->short_addr) == matter_ep) {
+            device_info_set_matter_endpoint(info->device_id, matter_ep);
+            return true;
+        }
+    }
+    return false;
+}
+
+void bridge_manager_reconcile_bridged_devices(void)
+{
+    node_t *node = node::get();
+    if (!node) {
+        return;
+    }
+
+    int removed = 0;
+    endpoint_t *ep = endpoint::get_first(node);
+    while (ep) {
+        endpoint_t *next = endpoint::get_next(ep);
+        if (!cluster::get(ep, BridgedDeviceBasicInformation::Id)) {
+            ep = next;
+            continue;
+        }
+
+        uint16_t ep_id = endpoint::get_id(ep);
+        if (!bridge_endpoint_is_known(ep_id)) {
+            ESP_LOGW(TAG, "Orphan bridged endpoint %u (no Zigbee device), removing", ep_id);
+            app_bridged_device_t *dev = app_bridge_get_device_by_matter_endpointid(ep_id);
+            esp_err_t err = dev ? app_bridge_remove_device(dev) : ESP_ERR_NOT_FOUND;
+            if (err != ESP_OK) {
+                /* app 层已无记录，或删除失败：直接销毁端点，避免 HA 里永久残留 */
+                esp_matter_bridge::erase_bridged_device_info(ep_id);
+                if (endpoint::destroy(node, ep) != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to destroy orphan endpoint %u", ep_id);
+                }
+            }
+            removed++;
+        }
+        ep = next;
+    }
+
+    if (removed > 0) {
+        ESP_LOGI(TAG, "Reconciled %d orphan bridged endpoint(s)", removed);
+        bridge_manager_notify_parts_list_changed();
+    }
+}
+
+/* 端点销毁后补发一次 PartsList 报告。见 bridge_manager.h 的说明。 */
+static esp_timer_handle_t s_parts_list_timer;
+
+static void parts_list_report_cb(void *arg)
+{
+    (void)arg;
+    if (!esp_matter::is_started()) {
+        return;
+    }
+    ESP_LOGI(TAG, "Refreshing Descriptor.PartsList after endpoint removal");
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    /* 桥接设备挂在 Aggregator 端点下，HA 是读取 Aggregator 的 PartsList 来
+     * 判断子设备增删的。只刷新 EP0 不够（EP0 列表里只有 Aggregator 自己），
+     * 必须把所有端点的 PartsList 都标记一次，重点是刚失去子设备的 Aggregator。 */
+    esp_matter::node_t *node = esp_matter::node::get();
+    for (esp_matter::endpoint_t *ep = esp_matter::endpoint::get_first(node);
+         ep != NULL; ep = esp_matter::endpoint::get_next(ep)) {
+        uint16_t ep_id = esp_matter::endpoint::get_id(ep);
+        ESP_LOGI(TAG, "  -> report PartsList of ep %u", ep_id);
+        /* 必须递增 Descriptor 集群的 DataVersion：Matter controller（HA）用
+         * DataVersion 判断属性是否真的变化，版本不涨的报告会被直接丢弃，
+         * 症状就是网关已删端点、HA 里设备却一直留着。 */
+        esp_matter::cluster_t *desc = esp_matter::cluster::get(ep, Descriptor::Id);
+        if (desc != NULL) {
+            esp_matter::cluster::increase_data_version(desc);
+        }
+        ::MatterReportingAttributeChangeCallback(ep_id, Descriptor::Id,
+                                                 Descriptor::Attributes::PartsList::Id);
+    }
+}
+
+void bridge_manager_notify_parts_list_changed(void)
+{
+    if (!s_parts_list_timer) {
+        esp_timer_create_args_t args = {
+            .callback = parts_list_report_cb,
+            .arg = NULL,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "parts_list",
+            .skip_unhandled_events = false,
+        };
+        if (esp_timer_create(&args, &s_parts_list_timer) != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create parts_list timer");
+            return;
+        }
+    }
+    /* 稍等片刻，避开正在生成的订阅报告，避免脏标记被本轮去重吞掉 */
+    esp_timer_stop(s_parts_list_timer);
+    esp_timer_start_once(s_parts_list_timer, 500 * 1000);
 }
 
 void bridge_manager_report_sensor_data(uint16_t short_addr, uint8_t endpoint,

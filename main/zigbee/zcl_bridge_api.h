@@ -44,6 +44,12 @@ typedef struct {
     /** 上报开关状态 */
     void (*report_on_off)(uint16_t short_addr, uint8_t endpoint, bool on);
 
+    /** 上报电池状态（0x0001 Power Configuration）
+     *  @param percent_half 剩余电量，单位 0.5%（0~200），0xFF 表示设备未上报
+     *  @param voltage_100mv 电池电压，单位 100mV，0xFF 表示设备未上报 */
+    void (*report_battery)(uint16_t short_addr, uint8_t endpoint,
+                           uint8_t percent_half, uint8_t voltage_100mv);
+
     /* ---- 灯具相关上报 ---- */
 
     /** 上报亮度（0x0008 CurrentLevel，0-254） */

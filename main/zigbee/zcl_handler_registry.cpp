@@ -32,6 +32,7 @@
 #include "handlers/handler_color.h"
 #include "handlers/handler_illuminance.h"
 #include "handlers/handler_occupancy.h"
+#include "handlers/handler_power_config.h"
 #include "handlers/handler_ota.h"
 #include <esp_log.h>
 
@@ -159,7 +160,12 @@ esp_err_t zcl_handler_dispatch(esp_zb_core_action_callback_id_t callback_id, con
     }
 
     default:
-        return ESP_OK;
+        /* 非属性类回调（如 OTA Server 的 Query Image）交由上层继续分发，
+         * 这里必须返回 NOT_FOUND。若返回 ESP_OK，zdp_discovery 的
+         * zb_action_handler 会认为已处理而不再调用 OTA 处理器，
+         * ZBOSS 随后在没有注册镜像的情况下构造 Query Next Image Response，
+         * 解引用空指针直接崩溃（LoadProhibited / EXCVADDR 0x0c）。 */
+        return ESP_ERR_NOT_FOUND;
     }
 }
 
@@ -198,6 +204,7 @@ void zcl_handlers_init(void)
     zcl_handler_register(&color_control_handler);   /* 0x0300 */
     zcl_handler_register(&illuminance_handler);     /* 0x0400 */
     zcl_handler_register(&occupancy_handler);       /* 0x0406 */
+    zcl_handler_register(&power_config_handler);    /* 0x0001：电池电量 */
     zcl_handler_register(&ota_upgrade_handler);     /* 0x0019：仅读当前固件版本 */
 
     /* ── 以后新增 cluster 只需在这里加一行 ── */

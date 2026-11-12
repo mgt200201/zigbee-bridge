@@ -42,6 +42,7 @@
 #include <zcl/esp_zigbee_zcl_color_control.h>
 #include <zcl/esp_zigbee_zcl_illuminance_meas.h>
 #include <zcl/esp_zigbee_zcl_occupancy_sensing.h>
+#include <zcl/esp_zigbee_zcl_power_config.h>
 #include <nwk/esp_zigbee_nwk.h>
 
 static const char *TAG = "zdp_discovery";
@@ -568,9 +569,14 @@ void zdp_discovery_request_state_report(uint16_t short_addr, uint8_t endpoint)
 
 /** 温湿度传感器 (uiid 0x0001) 默认上报参数 —— 对齐市面主流温湿度计 */
 #define TH_REPORT_MIN_INTERVAL      5      /**< 最小上报间隔（秒） */
-#define TH_REPORT_MAX_INTERVAL      1800   /**< 最大上报间隔（秒） */
+#define TH_REPORT_MAX_INTERVAL      (29 * 60)   /**< 最大上报间隔 29 分钟（秒） */
 #define TH_REPORT_TEMP_CHANGE       50     /**< 温度变化阈值 0.5°C（单位 0.01°C） */
-#define TH_REPORT_HUMIDITY_CHANGE   100    /**< 湿度变化阈值 1%（单位 0.01%） */
+#define TH_REPORT_HUMIDITY_CHANGE   400    /**< 湿度变化阈值 4%（单位 0.01%） */
+/* 电池电量上报：16 分钟起报、27 分钟兜底，变化 1%（2 个 0.5% 单位）即报。
+ * 注意 ZCL Configure Reporting 的 min/max 单位是秒，不是分钟。 */
+#define TH_BATTERY_REPORT_MIN_INTERVAL  (16 * 60)   /**< 16 分钟（秒） */
+#define TH_BATTERY_REPORT_MAX_INTERVAL  (27 * 60)   /**< 27 分钟（秒） */
+#define TH_BATTERY_REPORT_CHANGE        2
 
 static void send_config_report(uint16_t short_addr, uint8_t endpoint,
                                uint16_t cluster_id, uint16_t attr_id,
@@ -596,6 +602,13 @@ void zdp_discovery_configure_reporting(uint16_t short_addr, uint8_t endpoint)
                        ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
                        ESP_ZB_ZCL_ATTR_TYPE_U16, TH_REPORT_HUMIDITY_CHANGE,
                        TH_REPORT_MIN_INTERVAL, TH_REPORT_MAX_INTERVAL);
+
+    /* 电池电量：设备可能不实现该属性，配置失败会被协议栈回 UNSUPPORTED_ATTRIBUTE，属正常 */
+    send_config_report(short_addr, endpoint,
+                       ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
+                       ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
+                       ESP_ZB_ZCL_ATTR_TYPE_U8, TH_BATTERY_REPORT_CHANGE,
+                       TH_BATTERY_REPORT_MIN_INTERVAL, TH_BATTERY_REPORT_MAX_INTERVAL);
 }
 
 /* ==================== 雷达上报配置 ==================== */
@@ -711,16 +724,7 @@ void zdp_discovery_handle_device_leave(uint16_t short_addr, const esp_zb_ieee_ad
 {
     ESP_LOGI(TAG, "Handling device leave: 0x%04x", short_addr);
 
-    /* 移除 Matter 桥接设备 */
-    app_bridged_device_t *bridged = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
-    if (bridged) {
-        ESP_LOGI(TAG, "Removing Matter bridge for device 0x%04x", short_addr);
-        app_bridge_remove_device(bridged);
-    }
-
-    /* 从 device_info 中删除（包括 NVS 持久化数据）。
-     * 短地址会随重加入网变化，导致 NVS 里存的可能是过期值；
-     * 因此优先按稳定不变的 IEEE 查找，找不到再退回短地址。 */
+    /* 先按稳定标识（IEEE）定位 device_info：短地址会随重入网变化，可能已过期 */
     device_info_t *info = NULL;
     if (ieee) {
         info = device_info_find_by_ieee(ieee);
@@ -728,6 +732,35 @@ void zdp_discovery_handle_device_leave(uint16_t short_addr, const esp_zb_ieee_ad
     if (!info) {
         info = device_info_find_by_short_addr(short_addr);
     }
+
+    /* 定位 Matter 桥接设备：短地址 → device_info 记录的 Matter 端点 → device_info 里的旧短地址。
+     * 只用短地址查会漏掉（端点里存的可能是过期短地址），导致 Matter 端点永远删不掉、
+     * HA 里残留设备；下次重新配网还会多建一个新端点。 */
+    app_bridged_device_t *bridged = app_bridge_get_device_by_zigbee_shortaddr(short_addr);
+    if (!bridged && info) {
+        if (info->matter_endpoint_id != 0) {
+            bridged = app_bridge_get_device_by_matter_endpointid(info->matter_endpoint_id);
+        }
+        if (!bridged && info->short_addr != short_addr) {
+            bridged = app_bridge_get_device_by_zigbee_shortaddr(info->short_addr);
+        }
+    }
+    if (bridged) {
+        ESP_LOGI(TAG, "Removing Matter bridge for device 0x%04x", short_addr);
+        esp_err_t err = app_bridge_remove_device(bridged);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to remove Matter bridge for 0x%04x: %d", short_addr, err);
+        }
+        /* esp_matter 在 disable() 里标记的 PartsList 脏标记可能与正在生成的
+         * 订阅报告重叠而被丢弃，导致 HA 只收到删除前的列表。销毁完成后补发一次。 */
+        if (err == ESP_OK) {
+            bridge_manager_notify_parts_list_changed();
+        }
+    } else {
+        ESP_LOGW(TAG, "No Matter bridge matched leaving device 0x%04x; "
+                      "endpoint may already be gone or unmatched", short_addr);
+    }
+
     if (info && info->device_id != DEVICE_ID_UNKNOWN) {
         device_info_remove_by_device_id(info->device_id);
     }
